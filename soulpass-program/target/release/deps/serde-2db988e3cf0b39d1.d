@@ -1,0 +1,14 @@
+\\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\deps\serde-2db988e3cf0b39d1.d: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs \\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\build\serde-97adaa07b9776afd\out\private.rs
+
+\\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\deps\libserde-2db988e3cf0b39d1.rlib: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs \\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\build\serde-97adaa07b9776afd\out\private.rs
+
+\\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\deps\libserde-2db988e3cf0b39d1.rmeta: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs \\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\build\serde-97adaa07b9776afd\out\private.rs
+
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+\\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\release\build\serde-97adaa07b9776afd\out\private.rs:
+
+# env-dep:OUT_DIR=\\\\?\\C:\\Users\\swarn\\developer\\Soulpass\\soulpass-program\\target\\release\\build\\serde-97adaa07b9776afd\\out

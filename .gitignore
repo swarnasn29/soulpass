@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Next.js / Web
+.next/
+out/
+build/
+soulpass-web/.env*
+soulpass-web/next-env.d.ts
+soulpass-web/*.tsbuildinfo
+
+# Anchor / Solana Program
+target/
+soulpass-program/target/
+soulpass-program/node_modules/
+*.so
+*.keypair.json
+soulpass-program/programs/**/target/
+
+# Local Tooling & Binaries
+solana-release/
+rustup-init.exe
+solana.tar.bz2
+anchor.zip
+*.fig
+*.docx
+*.zip
+*.tar.bz2
+*.exe
+
+# Testing
+coverage/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.pem
+*.log
+.vercel
+.turbo
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo

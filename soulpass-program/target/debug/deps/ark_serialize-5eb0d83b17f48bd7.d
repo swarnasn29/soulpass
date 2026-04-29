@@ -1,0 +1,11 @@
+C:\Users\swarn\developer\Soulpass\soulpass-program\target\debug\deps\ark_serialize-5eb0d83b17f48bd7.d: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\error.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\flags.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\impls.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\../README.md
+
+C:\Users\swarn\developer\Soulpass\soulpass-program\target\debug\deps\libark_serialize-5eb0d83b17f48bd7.rlib: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\error.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\flags.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\impls.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\../README.md
+
+C:\Users\swarn\developer\Soulpass\soulpass-program\target\debug\deps\libark_serialize-5eb0d83b17f48bd7.rmeta: C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\lib.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\error.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\flags.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\impls.rs C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\../README.md
+
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\lib.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\error.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\flags.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\impls.rs:
+C:\Users\swarn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.4.2\src\../README.md:
