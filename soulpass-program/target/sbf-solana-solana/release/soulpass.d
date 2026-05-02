@@ -1,1 +1,1 @@
-\\?\C:\Users\swarn\developer\Soulpass\soulpass-program\target\sbf-solana-solana\release\soulpass.so: \\?\C:\Users\swarn\developer\Soulpass\soulpass-program\programs\soulpass\src\lib.rs
+/Users/rythme/developer/blockchain/Soulpass/soulpass/soulpass-program/target/sbf-solana-solana/release/soulpass.so: /Users/rythme/developer/blockchain/Soulpass/soulpass/soulpass-program/programs/soulpass/src/lib.rs
