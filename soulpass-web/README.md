@@ -1,36 +1,105 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SoulPass — Web
 
-## Getting Started
+Next.js 16 + Privy + Solana web app for SoulPass. The reputation layer for real-world communities.
 
-First, run the development server:
+## Quick start
 
 ```bash
+npm install
+cp .env.example .env.local
+# Add your NEXT_PUBLIC_PRIVY_APP_ID and FEE_PAYER_SECRET_KEY
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Where it's used | Required |
+| --- | --- | --- |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | Client — Privy auth | Yes for auth |
+| `NEXT_PUBLIC_SOULPASS_PROGRAM_ID` | Client — program ID | Defaults to deployed |
+| `NEXT_PUBLIC_SOLANA_RPC_URL` | Client + server — RPC endpoint | Defaults to public devnet |
+| `NEXT_PUBLIC_FEE_PAYER_PUBKEY` | Client — sets `transaction.feePayer` | Yes |
+| `FEE_PAYER_SECRET_KEY` | **Server only** — relay cosigns + broadcasts | Yes |
 
-## Learn More
+`FEE_PAYER_SECRET_KEY` accepts either a base58 string or a JSON byte array (Solana CLI keypair format).
 
-To learn more about Next.js, take a look at the following resources:
+## Architecture
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Next.js app (client)                                            │
+│  • Privy social login → invisible Solana wallet (TEE-backed)    │
+│  • Builds VersionedTransaction with feePayer = SoulPass server  │
+│  • User wallet signs instructions only                          │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ POST /api/relay { txn base64 }
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Relay (Next.js API route, Node runtime)                         │
+│  • Whitelists program IDs (SoulPass + System + ComputeBudget)   │
+│  • Per-IP rate limit                                            │
+│  • Validates fee payer matches our server wallet                │
+│  • Cosigns as feePayer and broadcasts via Helius/devnet RPC     │
+└────────────────────────────┬────────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Solana program (deployed on devnet)                             │
+│  Program ID: 6oxNy4uApzwXVKAREsgxSGCSfjpCkRYFCz5aitVTkTyi        │
+│  • UserProfile / Event / Registration / Connection / Rating /   │
+│    Badge — all PDAs, no centralized state                       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Routes
 
-## Deploy on Vercel
+| Route | Purpose |
+| --- | --- |
+| `/` | Marketing landing |
+| `/onboarding` | Pick handle → init `UserProfile` PDA |
+| `/discover` | Browse events, see your reputation |
+| `/events/new` | Organizer creates an event |
+| `/events/[address]` | Event detail + register/cancel |
+| `/events/[address]/check-in` | Organizer scans attendees |
+| `/scan` | Show your QR + scan others to record connections |
+| `/profile` | Your rep, badges, sharable QR |
+| `/u/[wallet]` | Public profile (server-rendered) |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## On-chain instructions (all gasless)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All user-initiated transactions are routed through `/api/relay` with the SoulPass server wallet as fee payer:
+
+- `initialize_user(name, metadata_uri)`
+- `update_user_profile(name?, metadata_uri?)`
+- `create_event(event_id, title, description, metadata_uri, start_ts, end_ts, capacity)`
+- `register_for_event` / `cancel_registration`
+- `check_in` (organizer signs)
+- `record_connection` (one of the two participants signs; the other only needs to be checked-in)
+- `submit_rating(helpfulness, knowledge, vibe, reliability)`
+- `mark_no_show` (backend crank, after end + 6h grace)
+- `award_event_badge(kind)` / `award_lifetime_badge(kind)`
+
+## Build
+
+```bash
+npm run build && npm run start
+```
+
+For Vercel: set the env vars listed above in the project settings. The relay needs the secret key, so use a server-only environment variable (no `NEXT_PUBLIC_` prefix).
+
+## Contracts
+
+The Anchor program lives in `../soulpass-program`. Build & redeploy from there:
+
+```bash
+cd ../soulpass-program
+cargo build-sbf
+solana program deploy \
+  target/deploy/soulpass.so \
+  -k ../soulpass-web/payer-keypair.json \
+  --program-id target/deploy/soulpass-keypair.json \
+  --url https://api.devnet.solana.com
+```
+
+If you change the deployed program ID, update both `Anchor.toml` and `NEXT_PUBLIC_SOULPASS_PROGRAM_ID`.
