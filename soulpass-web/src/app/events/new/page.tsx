@@ -27,17 +27,19 @@ import {
   Phone,
   AtSign,
   ChevronDown,
-  Image as ImageIcon,
   Tag,
+  Sparkles,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button, Input, Textarea, Section } from "@/components/ui";
+import { ImageUpload, type ImageUploadValue } from "@/components/ImageUpload";
 import { cn } from "@/lib/cn";
 import { useSoulpass } from "@/hooks/useSoulpass";
 import { useGaslessTransaction } from "@/hooks/useGaslessTransaction";
 import { ixCreateEvent } from "@/lib/program";
 import { FEE_PAYER_PUBKEY } from "@/lib/solana";
 import { PublicKey } from "@solana/web3.js";
+import { listTemplates } from "@/lib/matchTemplates";
 
 function BrandSvg({ children, ...rest }: SVGProps<SVGSVGElement> & { children: React.ReactNode }) {
   return (
@@ -107,7 +109,8 @@ export default function NewEventPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
-  const [cover, setCover] = useState("");
+  const [cover, setCover] = useState<ImageUploadValue | null>(null);
+  const [venueImage, setVenueImage] = useState<ImageUploadValue | null>(null);
   const [startAt, setStartAt] = useState(nowPlusHours(24));
   const [endAt, setEndAt] = useState(nowPlusHours(28));
   const [capacity, setCapacity] = useState("50");
@@ -142,6 +145,9 @@ export default function NewEventPage() {
 
   const [gateReputation, setGateReputation] = useState(false);
   const [minReputation, setMinReputation] = useState("600");
+
+  const [matchmakingEnabled, setMatchmakingEnabled] = useState(false);
+  const [matchTemplateId, setMatchTemplateId] = useState<string>("tech");
 
   const [submitting, setSubmitting] = useState<null | "publish" | "draft">(null);
   const [err, setErr] = useState<string | null>(null);
@@ -199,7 +205,10 @@ export default function NewEventPage() {
       eventId: eventId.toString(),
       title: title.trim(),
       description: description.trim(),
-      cover: cover.trim(),
+      cover: cover?.url ?? "",
+      coverArUri: cover?.arUri,
+      venueImage: venueImage?.url ?? "",
+      venueImageArUri: venueImage?.arUri,
       location: location.trim(),
       startTs: Number(startTs),
       endTs: Number(endTs),
@@ -208,6 +217,10 @@ export default function NewEventPage() {
       questions,
       contactFields,
       minReputation: minRep,
+      matchSchema: {
+        enabled: matchmakingEnabled,
+        templateId: matchmakingEnabled ? matchTemplateId : null,
+      },
       status,
     };
   };
@@ -246,13 +259,54 @@ export default function NewEventPage() {
       const endTs = BigInt(Math.floor(new Date(endAt).getTime() / 1000));
       const cap = Math.max(1, Math.min(100_000, parseInt(capacity || "50", 10)));
 
+      // Pre-pin canonical event metadata to Arweave so the on-chain Event.metadataUri
+      // points at a permanent, gateway-agnostic ar:// reference. Best-effort — falls
+      // back to empty string so a transient Arweave failure never blocks publishing.
+      let metadataUri = "";
+      try {
+        const prepRes = await fetch("/api/events/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            organizer: wallet.address,
+            eventId: eventId.toString(),
+            title: title.trim(),
+            description: description.trim(),
+            cover: cover?.url ?? "",
+            coverArUri: cover?.arUri,
+            venueImage: venueImage?.url ?? "",
+            venueImageArUri: venueImage?.arUri,
+            location: location.trim(),
+            startTs: Number(startTs),
+            endTs: Number(endTs),
+            capacity: cap,
+            tags,
+            questions,
+            contactFields,
+            minReputation: gateReputation
+              ? Math.max(0, Math.min(100_000, parseInt(minReputation || "0", 10) || 0))
+              : null,
+            matchSchema: {
+              enabled: matchmakingEnabled,
+              templateId: matchmakingEnabled ? matchTemplateId : null,
+            },
+          }),
+        });
+        if (prepRes.ok) {
+          const prep = (await prepRes.json()) as { arUri?: string };
+          if (prep.arUri) metadataUri = prep.arUri;
+        }
+      } catch {
+        // Non-fatal — we still publish; /api/events will retry the pin.
+      }
+
       const { eventAddr, instruction } = ixCreateEvent({
         organizer,
         feePayer: FEE_PAYER_PUBKEY,
         eventId,
         title: title.slice(0, 80),
         description: description.slice(0, 480),
-        metadataUri: "",
+        metadataUri: metadataUri.slice(0, 200),
         startTs,
         endTs,
         capacity: cap,
@@ -264,10 +318,11 @@ export default function NewEventPage() {
         walletProvider: wallet,
       });
 
+      const payload = buildPayload(eventId, eventAddr.toBase58(), "published");
       await fetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(eventId, eventAddr.toBase58(), "published")),
+        body: JSON.stringify({ ...payload, metadataUri: metadataUri || undefined }),
       });
 
       router.push(`/events/${eventAddr.toBase58()}`);
@@ -361,18 +416,21 @@ export default function NewEventPage() {
                 placeholder="Description"
                 rows={5}
               />
-              <Input
-                icon={ImageIcon}
+              <ImageUpload
                 value={cover}
-                onChange={(e) => setCover(e.target.value)}
-                placeholder="Cover image URL (optional)"
+                onChange={setCover}
+                label="Cover image"
+                aspect="video"
+                kind="event-cover"
+                owner={wallet?.address}
+                hint="Hero image shown on the event page and in shares. Pinned permanently to Arweave."
               />
             </div>
           </Section>
 
           {/* Date & Location */}
           <Section title="Date & Location">
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Input
                   icon={Calendar}
@@ -394,6 +452,15 @@ export default function NewEventPage() {
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 placeholder="Location"
+              />
+              <ImageUpload
+                value={venueImage}
+                onChange={setVenueImage}
+                label="Venue photo (optional)"
+                aspect="wide"
+                kind="event-venue"
+                owner={wallet?.address}
+                hint="Help attendees recognize the room — entrance, stage, lobby. Stored permanently on Arweave."
               />
             </div>
           </Section>
@@ -642,6 +709,89 @@ export default function NewEventPage() {
               <p className="text-xs text-white/40">
                 Selected fields are required at registration.
               </p>
+            </div>
+          </Section>
+
+          {/* AI matchmaking */}
+          <Section title="AI Matchmaking">
+            <div className="space-y-4">
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={matchmakingEnabled}
+                  onChange={(e) => setMatchmakingEnabled(e.target.checked)}
+                  className="mt-1 h-4 w-4 cursor-pointer accent-[var(--color-accent)]"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-[var(--color-accent)]" />
+                    <span className="text-sm font-semibold text-white">
+                      Surface a perfect-match for each attendee in real time
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-white/50">
+                    During the event, every checked-in attendee sees their best next person to meet,
+                    based on reputation, badges, and the questions you choose below.
+                  </p>
+                </div>
+              </label>
+
+              {matchmakingEnabled && (
+                <div className="space-y-3">
+                  <p className="text-xs font-medium uppercase tracking-wider text-white/50">
+                    Pick a template
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {listTemplates().map((tpl) => {
+                      const active = matchTemplateId === tpl.id;
+                      return (
+                        <button
+                          key={tpl.id}
+                          type="button"
+                          onClick={() => setMatchTemplateId(tpl.id)}
+                          className={cn(
+                            "rounded-2xl border p-4 text-left transition-colors",
+                            active
+                              ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
+                              : "border-[var(--color-border)] bg-[var(--color-bg)] hover:border-white/20",
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-display text-base font-bold text-white">
+                              {tpl.name}
+                            </div>
+                            {active && (
+                              <span className="rounded-full bg-[var(--color-accent)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black">
+                                Selected
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-white/55">{tpl.tagline}</p>
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {tpl.dimensions.slice(0, 4).map((d) => (
+                              <span
+                                key={d.traitKey}
+                                className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60"
+                              >
+                                {d.label}
+                              </span>
+                            ))}
+                            {tpl.dimensions.length > 4 && (
+                              <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/40">
+                                +{tpl.dimensions.length - 4}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-white/40">
+                    Attendees will be asked a few short questions when they register — anything we
+                    already know from their profile is filled in automatically.
+                  </p>
+                </div>
+              )}
             </div>
           </Section>
 

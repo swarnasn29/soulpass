@@ -7,7 +7,7 @@ import { useEffect, useState, use as usePromise } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Calendar, MapPin, Users, ArrowRight, CheckCircle2, ExternalLink, ScanLine, Crown } from "lucide-react";
+import { Calendar, MapPin, ArrowRight, CheckCircle2, ExternalLink, ScanLine, Crown, Sparkles, ShieldCheck, Image as ImageIcon } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button, Card, Pill, StatTile } from "@/components/ui";
 import { useSoulpass } from "@/hooks/useSoulpass";
@@ -18,6 +18,9 @@ import { registrationPda } from "@/lib/pda";
 import { PublicKey } from "@solana/web3.js";
 import type { EventAccount, RegistrationAccount } from "@/lib/program";
 import type { EventMetadata } from "@/lib/eventMetaStore";
+import { MatchmakingForm } from "@/components/MatchmakingForm";
+import { PerfectMatchCard } from "@/components/PerfectMatchCard";
+import { AIMatchPanel } from "@/components/AIMatchPanel";
 
 function formatRange(start: number, end: number) {
   const s = new Date(start * 1000);
@@ -42,6 +45,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
   const [reg, setReg] = useState<RegistrationAccount | null>(null);
   const [busy, setBusy] = useState<"register" | "cancel" | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [registerPhase, setRegisterPhase] = useState<"idle" | "traits">("idle");
 
   useEffect(() => {
     if (!ready) return;
@@ -81,6 +85,14 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
   // eslint-disable-next-line react-hooks/purity
   const eventStarted = Math.floor(Date.now() / 1000) >= startTs;
 
+  const onClickRegister = () => {
+    if (meta?.matchSchema?.enabled && meta.matchSchema.templateId) {
+      setRegisterPhase("traits");
+      return;
+    }
+    void register();
+  };
+
   const register = async () => {
     if (!wallet) return;
     setErr(null);
@@ -97,6 +109,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ attendeeAddress: wallet.address }),
       }).catch(() => {});
+      setRegisterPhase("idle");
       await refresh();
     } catch (e) {
       setErr((e as Error).message);
@@ -127,6 +140,13 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
   if (!ready || !authenticated || userLoading || !isOnboarded) return null;
 
   const cover = meta?.cover;
+  const venueImage = meta?.venueImage;
+  const arweaveBacked = Boolean(meta?.metadataUri || meta?.coverArUri);
+  const arweaveTxId = meta?.metadataUri?.startsWith("ar://")
+    ? meta.metadataUri.slice(5)
+    : meta?.coverArUri?.startsWith("ar://")
+    ? meta.coverArUri.slice(5)
+    : "";
 
   return (
     <AppShell>
@@ -134,6 +154,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
         <Card className="overflow-hidden p-0">
           <div className="relative aspect-[21/8] w-full overflow-hidden bg-[var(--color-surface-2)]">
             {cover && (
+              // eslint-disable-next-line @next/next/no-img-element
               <img src={cover} alt="" className="h-full w-full object-cover" />
             )}
             <div className="absolute right-4 top-4 flex gap-2">
@@ -145,6 +166,14 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
               )}
               {onchain && <Pill>{onchain.status}</Pill>}
             </div>
+            {arweaveBacked && (
+              <div className="absolute left-4 bottom-4">
+                <Pill tone="accent">
+                  <ShieldCheck className="h-3 w-3" />
+                  Permanent on Arweave
+                </Pill>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[1fr_320px]">
             <div>
@@ -172,6 +201,23 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
                 <StatTile label="Checked in" value={onchain?.checkedInCount ?? 0} accent />
                 <StatTile label="Connections" value={onchain?.connectionCount ?? 0} />
               </div>
+
+              {venueImage && (
+                <div className="mt-8">
+                  <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white/50">
+                    <ImageIcon className="h-3.5 w-3.5" />
+                    The venue
+                  </div>
+                  <div className="relative aspect-[21/9] w-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={venueImage}
+                      alt={`${meta?.title ?? "Event"} venue`}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <aside className="space-y-3">
@@ -203,16 +249,48 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
                       </Button>
                     </Link>
                   </div>
+                ) : registerPhase === "traits" && meta?.matchSchema?.enabled && meta.matchSchema.templateId && wallet ? (
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-[var(--color-accent)]" />
+                      <span className="font-display text-xs font-bold uppercase tracking-widest text-[var(--color-accent)]">
+                        Quick matchmaking questions
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-white/60">
+                      Helps us point you at the right person to meet at the event.
+                    </p>
+                    <div className="mt-4">
+                      <MatchmakingForm
+                        templateId={meta.matchSchema.templateId}
+                        walletAddress={wallet.address}
+                        submitLabel="Save & register"
+                        onSubmitted={() => void register()}
+                      />
+                    </div>
+                    <button
+                      onClick={() => setRegisterPhase("idle")}
+                      className="mt-3 w-full text-center text-xs text-white/40 hover:text-white/70"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 ) : (
                   <div>
                     <span className="font-display text-xs font-bold uppercase tracking-widest text-white/60">
                       Registration
                     </span>
                     <div className="mt-2 text-sm text-white/70">
-                      {isFull ? "This event is at capacity." : eventStarted ? "Registration closed." : "Free to attend. We pay the gas."}
+                      {isFull
+                        ? "This event is at capacity."
+                        : eventStarted
+                        ? "Registration closed."
+                        : meta?.matchSchema?.enabled
+                        ? "Free to attend. A few quick questions help us match you."
+                        : "Free to attend. We pay the gas."}
                     </div>
                     <Button
-                      onClick={register}
+                      onClick={onClickRegister}
                       loading={busy === "register"}
                       disabled={isFull || eventStarted}
                       className="mt-4 w-full"
@@ -237,11 +315,44 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
                   View on Solana Explorer
                   <ExternalLink className="h-3 w-3" />
                 </Link>
+                {arweaveTxId && (
+                  <>
+                    <div className="mt-4 font-display text-[10px] font-bold uppercase tracking-widest text-white/40">
+                      Permanent metadata
+                    </div>
+                    <div className="mt-2 break-all font-mono">
+                      ar://{arweaveTxId.slice(0, 10)}…{arweaveTxId.slice(-6)}
+                    </div>
+                    <Link
+                      href={`${process.env.NEXT_PUBLIC_IRYS_GATEWAY ?? "https://devnet.irys.xyz"}/${arweaveTxId}`}
+                      target="_blank"
+                      className="mt-2 inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"
+                    >
+                      View permanent metadata
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </>
+                )}
               </Card>
             </aside>
           </div>
         </Card>
       </motion.div>
+
+      {meta?.matchSchema?.enabled && meta.matchSchema.templateId && reg?.checkedIn && wallet && (
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <AIMatchPanel
+            eventAddress={address}
+            viewerWallet={wallet.address}
+            intent="default"
+          />
+          <PerfectMatchCard
+            eventAddress={address}
+            templateId={meta.matchSchema.templateId}
+            walletAddress={wallet.address}
+          />
+        </div>
+      )}
 
       {err && (
         <p className="mt-4 rounded-2xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-3 text-sm text-[var(--color-danger)]">

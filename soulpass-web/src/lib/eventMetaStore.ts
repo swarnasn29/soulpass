@@ -1,13 +1,22 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+export type MatchSchemaConfig = {
+  enabled: boolean;
+  templateId: string | null; // one of MATCH_TEMPLATES keys when enabled
+};
+
 export type EventMetadata = {
   address: string;            // Event PDA (base58), or `draft:<organizer>:<eventId>` for drafts
   organizer: string;
   eventId: string;            // Stored as decimal string (BigInt-safe)
   title: string;
   description: string;
-  cover: string;              // image URL
+  cover: string;              // gateway URL of the event cover image (Arweave-pinned when uploaded)
+  coverArUri?: string;        // ar://<txId> — durable reference for the cover
+  venueImage?: string;        // gateway URL of the venue / room photo
+  venueImageArUri?: string;   // ar://<txId> for venue image
+  metadataUri?: string;       // ar://<txId> of the full metadata JSON (matches on-chain Event.metadataUri)
   location: string;
   startTs: number;
   endTs: number;
@@ -16,14 +25,28 @@ export type EventMetadata = {
   questions: string[];        // registration questions, in order
   contactFields: string[];    // contact/social ids the attendee must fill (e.g. "email", "twitter")
   minReputation: number | null; // null when no gate
+  matchSchema?: MatchSchemaConfig;
   status: "draft" | "published";
   createdAt: number;
 };
 
+// Persistent trait values for matchmaking. Keyed by wallet authority + traitKey.
+// Values use the same union as TraitValue in matchEngine, but stored as plain JSON.
+export type StoredTraitValue = string | string[] | number | [number, number];
+
+export type UserTraitEntry = {
+  value: StoredTraitValue;
+  source: "user" | "previous_event" | "reputation_bucket" | "badge_mix" | "bio_keywords";
+  updatedAt: number;
+};
+
+export type UserTraits = Record<string, UserTraitEntry>; // traitKey -> entry
+
 export type UserMetadata = {
   authority: string;
   name: string;
-  avatar: string;
+  avatar: string;          // gateway URL (Arweave-pinned when uploaded)
+  avatarArUri?: string;    // ar://<txId> — durable reference
   email?: string;
   bio?: string;
   createdAt: number;
@@ -49,6 +72,7 @@ type Store = {
   events: Record<string, EventMetadata>;
   users: Record<string, UserMetadata>;
   registrations: Record<string, RegistrationMetadata>;
+  traits: Record<string, UserTraits>; // wallet authority -> traits
 };
 
 const STORE_FILE = path.join(process.cwd(), ".soulpass-store.json");
@@ -64,9 +88,10 @@ async function readStore(): Promise<Store> {
       events: parsed.events ?? {},
       users: parsed.users ?? {},
       registrations: parsed.registrations ?? {},
+      traits: parsed.traits ?? {},
     };
   } catch {
-    cache = { events: {}, users: {}, registrations: {} };
+    cache = { events: {}, users: {}, registrations: {}, traits: {} };
   }
   return cache!;
 }
@@ -129,4 +154,31 @@ export async function upsertRegistration(meta: RegistrationMetadata): Promise<vo
   const s = await readStore();
   s.registrations[regKey(meta.eventAddress, meta.attendeeAddress)] = meta;
   await writeStore(s);
+}
+
+export async function getUserTraits(authority: string): Promise<UserTraits> {
+  const s = await readStore();
+  return s.traits[authority] ?? {};
+}
+
+export async function setUserTraits(
+  authority: string,
+  patch: Record<string, { value: StoredTraitValue; source: UserTraitEntry["source"] }>,
+): Promise<UserTraits> {
+  const s = await readStore();
+  const current = s.traits[authority] ?? {};
+  const now = Date.now();
+  for (const [k, v] of Object.entries(patch)) {
+    current[k] = { value: v.value, source: v.source, updatedAt: now };
+  }
+  s.traits[authority] = current;
+  await writeStore(s);
+  return current;
+}
+
+export async function listAllTraits(authorities: string[]): Promise<Record<string, UserTraits>> {
+  const s = await readStore();
+  const out: Record<string, UserTraits> = {};
+  for (const a of authorities) out[a] = s.traits[a] ?? {};
+  return out;
 }

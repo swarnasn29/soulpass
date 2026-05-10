@@ -9,7 +9,9 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Calendar,
+  Camera,
   ExternalLink,
+  Loader2,
   MapPin,
   Pencil,
   Share2,
@@ -52,6 +54,40 @@ export default function ProfilePage() {
   const [editingBio, setEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
   const [savingBio, setSavingBio] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarErr, setAvatarErr] = useState<string | null>(null);
+
+  const onAvatarChange = async (file: File | null) => {
+    if (!file || !data?.authority) return;
+    if (!file.type.startsWith("image/")) {
+      setAvatarErr("Avatar must be an image.");
+      return;
+    }
+    setAvatarBusy(true);
+    setAvatarErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("kind", "avatar");
+      fd.append("owner", data.authority);
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "Avatar upload failed");
+      }
+      const j = (await res.json()) as { url: string; arUri: string };
+      await fetch(`/api/users/${data.authority}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatar: j.url, avatarArUri: j.arUri }),
+      });
+      await refresh();
+    } catch (e) {
+      setAvatarErr((e as Error).message);
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
 
   const [organized, setOrganized] = useState<EventMetadata[] | null>(null);
   const [attended, setAttended] = useState<Attended[] | null>(null);
@@ -163,11 +199,42 @@ export default function ProfilePage() {
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
         <Card className="relative overflow-hidden">
           <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[auto_1fr_auto]">
-            <img
-              src={data.meta?.avatar}
-              alt=""
-              className="h-28 w-28 rounded-3xl bg-[var(--color-surface-2)] ring-2 ring-[var(--color-border)]"
-            />
+            <div className="flex flex-col items-start gap-1.5">
+              <label className="group relative h-28 w-28 cursor-pointer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={data.meta?.avatar}
+                  alt=""
+                  className="h-28 w-28 rounded-3xl bg-[var(--color-surface-2)] object-cover ring-2 ring-[var(--color-border)]"
+                />
+                <div className="absolute inset-0 flex items-center justify-center rounded-3xl bg-black/55 opacity-0 transition-opacity group-hover:opacity-100">
+                  {avatarBusy ? (
+                    <Loader2 className="h-6 w-6 animate-spin text-white" />
+                  ) : (
+                    <div className="flex flex-col items-center gap-1 text-white">
+                      <Camera className="h-5 w-5" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Change</span>
+                    </div>
+                  )}
+                </div>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+                  className="hidden"
+                  onChange={(e) => onAvatarChange(e.target.files?.[0] ?? null)}
+                  disabled={avatarBusy}
+                />
+              </label>
+              {data.meta?.avatarArUri && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
+                  <Sparkles className="h-3 w-3" />
+                  On Arweave
+                </span>
+              )}
+              {avatarErr && (
+                <span className="text-[10px] text-[var(--color-danger)]">{avatarErr}</span>
+              )}
+            </div>
 
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -200,6 +267,13 @@ export default function ProfilePage() {
                 <Share2 className="h-3 w-3" />
                 Copy profile link
               </button>
+              <Link
+                href="/profile/matching"
+                className="inline-flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:underline"
+              >
+                <Sparkles className="h-3 w-3" />
+                Matching profile
+              </Link>
               <Link
                 href={explorer(data.authority)}
                 target="_blank"

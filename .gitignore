@@ -24,6 +24,10 @@ soulpass-program/node_modules/
 *.keypair.json
 soulpass-program/programs/**/target/
 
+# Arweave wallet (legacy — replaced by Irys/SOL payment, no JWK needed)
+arweave-keypair.json
+soulpass-web/arweave-keypair.json
+
 # Local Tooling & Binaries
 solana-release/
 rustup-init.exe
