@@ -159,20 +159,26 @@ export type StreamChunk =
 
 // Streams the chat completion, classifying each token as either reasoning
 // (inside <think>…</think>) or final answer text.
-export async function* streamMatch(prompt: string): AsyncIterable<StreamChunk> {
+export async function* streamMatch(
+  prompt: string,
+  opts?: { signal?: AbortSignal },
+): AsyncIterable<StreamChunk> {
   const c = getClient();
 
-  const completion = await c.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: prompt },
-    ],
-    temperature: 0.6,
-    top_p: 0.95,
-    max_tokens: 8192, // reasoning + JSON answer fits comfortably; full 65k is overkill and slow
-    stream: true,
-  });
+  const completion = await c.chat.completions.create(
+    {
+      model: MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.6,
+      top_p: 0.95,
+      max_tokens: 8192, // reasoning + JSON answer fits comfortably; full 65k is overkill and slow
+      stream: true,
+    },
+    { signal: opts?.signal },
+  );
 
   // Split arriving deltas into thinking vs answer by tracking whether we're
   // inside <think>…</think>. Buffers across chunk boundaries so the tag itself

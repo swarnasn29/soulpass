@@ -1,37 +1,35 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import "server-only";
+import { getSupabase } from "./supabase";
 
 export type MatchSchemaConfig = {
   enabled: boolean;
-  templateId: string | null; // one of MATCH_TEMPLATES keys when enabled
+  templateId: string | null;
 };
 
 export type EventMetadata = {
-  address: string;            // Event PDA (base58), or `draft:<organizer>:<eventId>` for drafts
+  address: string;
   organizer: string;
-  eventId: string;            // Stored as decimal string (BigInt-safe)
+  eventId: string;
   title: string;
   description: string;
-  cover: string;              // gateway URL of the event cover image (Arweave-pinned when uploaded)
-  coverArUri?: string;        // ar://<txId> — durable reference for the cover
-  venueImage?: string;        // gateway URL of the venue / room photo
-  venueImageArUri?: string;   // ar://<txId> for venue image
-  metadataUri?: string;       // ar://<txId> of the full metadata JSON (matches on-chain Event.metadataUri)
+  cover: string;
+  coverArUri?: string;
+  venueImage?: string;
+  venueImageArUri?: string;
+  metadataUri?: string;
   location: string;
   startTs: number;
   endTs: number;
   capacity: number;
   tags: string[];
-  questions: string[];        // registration questions, in order
-  contactFields: string[];    // contact/social ids the attendee must fill (e.g. "email", "twitter")
-  minReputation: number | null; // null when no gate
+  questions: string[];
+  contactFields: string[];
+  minReputation: number | null;
   matchSchema?: MatchSchemaConfig;
   status: "draft" | "published";
   createdAt: number;
 };
 
-// Persistent trait values for matchmaking. Keyed by wallet authority + traitKey.
-// Values use the same union as TraitValue in matchEngine, but stored as plain JSON.
 export type StoredTraitValue = string | string[] | number | [number, number];
 
 export type UserTraitEntry = {
@@ -40,13 +38,13 @@ export type UserTraitEntry = {
   updatedAt: number;
 };
 
-export type UserTraits = Record<string, UserTraitEntry>; // traitKey -> entry
+export type UserTraits = Record<string, UserTraitEntry>;
 
 export type UserMetadata = {
   authority: string;
   name: string;
-  avatar: string;          // gateway URL (Arweave-pinned when uploaded)
-  avatarArUri?: string;    // ar://<txId> — durable reference
+  avatar: string;
+  avatarArUri?: string;
   email?: string;
   bio?: string;
   createdAt: number;
@@ -64,121 +62,267 @@ export type RegistrationMetadata = {
   contact?: Record<string, string>;
 };
 
-function regKey(eventAddress: string, attendeeAddress: string) {
-  return `${eventAddress}::${attendeeAddress}`;
-}
+// --- snake_case ↔ camelCase mappers ---------------------------------------
 
-type Store = {
-  events: Record<string, EventMetadata>;
-  users: Record<string, UserMetadata>;
-  registrations: Record<string, RegistrationMetadata>;
-  traits: Record<string, UserTraits>; // wallet authority -> traits
+type EventRow = {
+  address: string;
+  organizer: string;
+  event_id: string;
+  title: string;
+  description: string;
+  cover: string;
+  cover_ar_uri: string | null;
+  venue_image: string;
+  venue_image_ar_uri: string | null;
+  metadata_uri: string | null;
+  location: string;
+  start_ts: number;
+  end_ts: number;
+  capacity: number;
+  tags: string[];
+  questions: string[];
+  contact_fields: string[];
+  min_reputation: number | null;
+  match_schema: MatchSchemaConfig | null;
+  status: "draft" | "published";
+  created_at: number;
 };
 
-const STORE_FILE = path.join(process.cwd(), ".soulpass-store.json");
-
-let cache: Store | null = null;
-
-async function readStore(): Promise<Store> {
-  if (cache) return cache;
-  try {
-    const raw = await fs.readFile(STORE_FILE, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<Store>;
-    cache = {
-      events: parsed.events ?? {},
-      users: parsed.users ?? {},
-      registrations: parsed.registrations ?? {},
-      traits: parsed.traits ?? {},
-    };
-  } catch {
-    cache = { events: {}, users: {}, registrations: {}, traits: {} };
-  }
-  return cache!;
+function rowToEvent(r: EventRow): EventMetadata {
+  return {
+    address: r.address,
+    organizer: r.organizer,
+    eventId: r.event_id,
+    title: r.title,
+    description: r.description,
+    cover: r.cover,
+    coverArUri: r.cover_ar_uri ?? undefined,
+    venueImage: r.venue_image,
+    venueImageArUri: r.venue_image_ar_uri ?? undefined,
+    metadataUri: r.metadata_uri ?? undefined,
+    location: r.location,
+    startTs: Number(r.start_ts),
+    endTs: Number(r.end_ts),
+    capacity: r.capacity,
+    tags: r.tags ?? [],
+    questions: r.questions ?? [],
+    contactFields: r.contact_fields ?? [],
+    minReputation: r.min_reputation,
+    matchSchema: r.match_schema ?? undefined,
+    status: r.status,
+    createdAt: Number(r.created_at),
+  };
 }
 
-async function writeStore(s: Store) {
-  cache = s;
-  await fs.writeFile(STORE_FILE, JSON.stringify(s, null, 2), "utf-8");
+function eventToRow(e: EventMetadata): EventRow {
+  return {
+    address: e.address,
+    organizer: e.organizer,
+    event_id: e.eventId,
+    title: e.title,
+    description: e.description,
+    cover: e.cover,
+    cover_ar_uri: e.coverArUri ?? null,
+    venue_image: e.venueImage ?? "",
+    venue_image_ar_uri: e.venueImageArUri ?? null,
+    metadata_uri: e.metadataUri ?? null,
+    location: e.location,
+    start_ts: e.startTs,
+    end_ts: e.endTs,
+    capacity: e.capacity,
+    tags: e.tags,
+    questions: e.questions,
+    contact_fields: e.contactFields,
+    min_reputation: e.minReputation,
+    match_schema: e.matchSchema ?? null,
+    status: e.status,
+    created_at: e.createdAt,
+  };
 }
 
-export async function listEvents(opts?: { includeDrafts?: boolean; organizer?: string }): Promise<EventMetadata[]> {
-  const s = await readStore();
-  let events = Object.values(s.events);
-  if (!opts?.includeDrafts) {
-    events = events.filter((e) => e.status !== "draft");
-  }
-  if (opts?.organizer) {
-    events = events.filter((e) => e.organizer === opts.organizer);
-  }
-  return events.sort((a, b) => a.startTs - b.startTs);
+type UserRow = {
+  authority: string;
+  name: string;
+  avatar: string;
+  avatar_ar_uri: string | null;
+  email: string | null;
+  bio: string | null;
+  created_at: number;
+};
+
+function rowToUser(r: UserRow): UserMetadata {
+  return {
+    authority: r.authority,
+    name: r.name,
+    avatar: r.avatar,
+    avatarArUri: r.avatar_ar_uri ?? undefined,
+    email: r.email ?? undefined,
+    bio: r.bio ?? undefined,
+    createdAt: Number(r.created_at),
+  };
+}
+
+type RegRow = {
+  event_address: string;
+  attendee_address: string;
+  status: RegistrationStatus;
+  registered_at: number;
+  decided_at: number | null;
+  answers: Record<string, string> | null;
+  contact: Record<string, string> | null;
+};
+
+function rowToReg(r: RegRow): RegistrationMetadata {
+  return {
+    eventAddress: r.event_address,
+    attendeeAddress: r.attendee_address,
+    status: r.status,
+    registeredAt: Number(r.registered_at),
+    decidedAt: r.decided_at != null ? Number(r.decided_at) : undefined,
+    answers: r.answers ?? undefined,
+    contact: r.contact ?? undefined,
+  };
+}
+
+// --- Events ---------------------------------------------------------------
+
+export async function listEvents(opts?: {
+  includeDrafts?: boolean;
+  organizer?: string;
+}): Promise<EventMetadata[]> {
+  const sb = getSupabase();
+  let q = sb.from("events").select("*").order("start_ts", { ascending: true });
+  if (!opts?.includeDrafts) q = q.eq("status", "published");
+  if (opts?.organizer) q = q.eq("organizer", opts.organizer);
+  const { data, error } = await q;
+  if (error) throw new Error(`listEvents: ${error.message}`);
+  return (data ?? []).map((r) => rowToEvent(r as EventRow));
 }
 
 export async function getEvent(address: string): Promise<EventMetadata | null> {
-  const s = await readStore();
-  return s.events[address] ?? null;
+  const sb = getSupabase();
+  const { data, error } = await sb.from("events").select("*").eq("address", address).maybeSingle();
+  if (error) throw new Error(`getEvent: ${error.message}`);
+  return data ? rowToEvent(data as EventRow) : null;
 }
 
 export async function upsertEvent(meta: EventMetadata): Promise<void> {
-  const s = await readStore();
-  s.events[meta.address] = meta;
-  await writeStore(s);
+  const sb = getSupabase();
+  const { error } = await sb.from("events").upsert(eventToRow(meta), { onConflict: "address" });
+  if (error) throw new Error(`upsertEvent: ${error.message}`);
 }
 
+// --- Users ----------------------------------------------------------------
+
 export async function getUser(authority: string): Promise<UserMetadata | null> {
-  const s = await readStore();
-  return s.users[authority] ?? null;
+  const sb = getSupabase();
+  const { data, error } = await sb.from("users").select("*").eq("authority", authority).maybeSingle();
+  if (error) throw new Error(`getUser: ${error.message}`);
+  return data ? rowToUser(data as UserRow) : null;
 }
 
 export async function upsertUser(meta: UserMetadata): Promise<void> {
-  const s = await readStore();
-  s.users[meta.authority] = meta;
-  await writeStore(s);
+  const sb = getSupabase();
+  const row: UserRow = {
+    authority: meta.authority,
+    name: meta.name,
+    avatar: meta.avatar,
+    avatar_ar_uri: meta.avatarArUri ?? null,
+    email: meta.email ?? null,
+    bio: meta.bio ?? null,
+    created_at: meta.createdAt,
+  };
+  const { error } = await sb.from("users").upsert(row, { onConflict: "authority" });
+  if (error) throw new Error(`upsertUser: ${error.message}`);
 }
 
+// --- Registrations --------------------------------------------------------
+
 export async function listRegistrations(eventAddress: string): Promise<RegistrationMetadata[]> {
-  const s = await readStore();
-  return Object.values(s.registrations)
-    .filter((r) => r.eventAddress === eventAddress)
-    .sort((a, b) => b.registeredAt - a.registeredAt);
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("registrations")
+    .select("*")
+    .eq("event_address", eventAddress)
+    .order("registered_at", { ascending: false });
+  if (error) throw new Error(`listRegistrations: ${error.message}`);
+  return (data ?? []).map((r) => rowToReg(r as RegRow));
 }
 
 export async function getRegistration(
   eventAddress: string,
   attendeeAddress: string,
 ): Promise<RegistrationMetadata | null> {
-  const s = await readStore();
-  return s.registrations[regKey(eventAddress, attendeeAddress)] ?? null;
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("registrations")
+    .select("*")
+    .eq("event_address", eventAddress)
+    .eq("attendee_address", attendeeAddress)
+    .maybeSingle();
+  if (error) throw new Error(`getRegistration: ${error.message}`);
+  return data ? rowToReg(data as RegRow) : null;
 }
 
 export async function upsertRegistration(meta: RegistrationMetadata): Promise<void> {
-  const s = await readStore();
-  s.registrations[regKey(meta.eventAddress, meta.attendeeAddress)] = meta;
-  await writeStore(s);
+  const sb = getSupabase();
+  const row: RegRow = {
+    event_address: meta.eventAddress,
+    attendee_address: meta.attendeeAddress,
+    status: meta.status,
+    registered_at: meta.registeredAt,
+    decided_at: meta.decidedAt ?? null,
+    answers: meta.answers ?? null,
+    contact: meta.contact ?? null,
+  };
+  const { error } = await sb
+    .from("registrations")
+    .upsert(row, { onConflict: "event_address,attendee_address" });
+  if (error) throw new Error(`upsertRegistration: ${error.message}`);
 }
 
+// --- Traits ---------------------------------------------------------------
+
 export async function getUserTraits(authority: string): Promise<UserTraits> {
-  const s = await readStore();
-  return s.traits[authority] ?? {};
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("user_traits")
+    .select("data")
+    .eq("authority", authority)
+    .maybeSingle();
+  if (error) throw new Error(`getUserTraits: ${error.message}`);
+  return (data?.data as UserTraits) ?? {};
 }
 
 export async function setUserTraits(
   authority: string,
   patch: Record<string, { value: StoredTraitValue; source: UserTraitEntry["source"] }>,
 ): Promise<UserTraits> {
-  const s = await readStore();
-  const current = s.traits[authority] ?? {};
+  const sb = getSupabase();
+  const current = await getUserTraits(authority);
   const now = Date.now();
   for (const [k, v] of Object.entries(patch)) {
     current[k] = { value: v.value, source: v.source, updatedAt: now };
   }
-  s.traits[authority] = current;
-  await writeStore(s);
+  const { error } = await sb
+    .from("user_traits")
+    .upsert({ authority, data: current, updated_at: now }, { onConflict: "authority" });
+  if (error) throw new Error(`setUserTraits: ${error.message}`);
   return current;
 }
 
 export async function listAllTraits(authorities: string[]): Promise<Record<string, UserTraits>> {
-  const s = await readStore();
+  const sb = getSupabase();
+  if (authorities.length === 0) return {};
+  const { data, error } = await sb
+    .from("user_traits")
+    .select("authority, data")
+    .in("authority", authorities);
+  if (error) throw new Error(`listAllTraits: ${error.message}`);
   const out: Record<string, UserTraits> = {};
-  for (const a of authorities) out[a] = s.traits[a] ?? {};
+  for (const a of authorities) out[a] = {};
+  for (const row of data ?? []) {
+    out[(row as { authority: string }).authority] = (row as { data: UserTraits }).data ?? {};
+  }
   return out;
 }

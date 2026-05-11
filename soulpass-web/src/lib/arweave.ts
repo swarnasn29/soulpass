@@ -106,9 +106,11 @@ async function ensureFunded(byteLength: number): Promise<void> {
       const toFund = BigNumber.max(capped.minus(loaded), price.minus(loaded));
       if (toFund.lte(0)) return;
 
-      console.log(
-        `[storage] auto-funding Irys: ${toFund.toString()} lamports for ${byteLength}B upload (price=${price.toString()}, loaded=${loaded.toString()})`,
-      );
+      if (process.env.SOULPASS_DEBUG_STORAGE === "1") {
+        console.log(
+          `[storage] auto-funding Irys: ${toFund.toString()} lamports for ${byteLength}B upload (price=${price.toString()}, loaded=${loaded.toString()})`,
+        );
+      }
       try {
         await irys.fund(toFund);
       } catch (e) {

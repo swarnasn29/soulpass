@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Providers from "@/lib/providers";
+import { validateEnv } from "@/lib/env";
+
+// Run env validation at module load so misconfigured deploys fail loud during
+// the first SSR render (production) or log a warning (dev).
+validateEnv();
 
 const inter = Inter({
   variable: "--font-inter",
@@ -24,16 +29,35 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SoulPass — Web2 simplicity. Web3 permanence.",
+  title: {
+    default: "SoulPass — Web2 simplicity. Web3 permanence.",
+    template: "%s · SoulPass",
+  },
   description:
     "The reputation layer for real-world communities. Turn every event attendance and every handshake into permanent on-chain proof. Built on Solana.",
-  metadataBase: new URL("https://soulpass.xyz"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://soulpass.xyz"),
+  applicationName: "SoulPass",
   openGraph: {
     title: "SoulPass",
-    description:
-      "Your reputation. Your badges. Your proof. Forever on Solana.",
+    description: "Your reputation. Your badges. Your proof. Forever on Solana.",
     type: "website",
+    siteName: "SoulPass",
   },
+  twitter: {
+    card: "summary_large_image",
+    title: "SoulPass",
+    description: "Your reputation. Your badges. Your proof. Forever on Solana.",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
+};
+
+export const viewport = {
+  themeColor: "#0B0D11",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

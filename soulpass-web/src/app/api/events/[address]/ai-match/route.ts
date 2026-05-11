@@ -221,9 +221,35 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
         candidates: candidatesForClient,
       });
 
+      // Hard ceiling on the agent's runtime so a slow upstream never hangs the
+      // SSE stream forever. On timeout we still emit a deterministic fallback
+      // so the client always renders a result.
+      const NIM_TIMEOUT_MS = 45_000;
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), NIM_TIMEOUT_MS);
+
+      const sendFallback = (timedOut: boolean) => {
+        const top = candidateProfiles[0];
+        send("result", {
+          primary: top
+            ? {
+                wallet: top.wallet,
+                reason: top.preRankReasons?.[0] ?? "Strong overall fit on shared interests.",
+              }
+            : null,
+          alternates: candidateProfiles.slice(1, 3).map((c) => ({
+            wallet: c.wallet,
+            reason: c.preRankReasons?.[0] ?? "Worth a hello.",
+          })),
+          candidates: candidatesForClient,
+          fallback: true,
+          timedOut,
+        });
+      };
+
       let answerBuf = "";
       try {
-        for await (const c of streamMatch(userPrompt)) {
+        for await (const c of streamMatch(userPrompt, { signal: ac.signal })) {
           if (c.kind === "thinking") {
             send("thinking", c.text);
           } else {
@@ -234,28 +260,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
 
         const parsed = parseAgentMatch(answerBuf, validWallets);
         if (!parsed || !parsed.primary) {
-          // Fallback: deterministic top match wins, with its top reason as the "why".
-          const top = candidateProfiles[0];
-          send("result", {
-            primary: top
-              ? {
-                  wallet: top.wallet,
-                  reason: top.preRankReasons?.[0] ?? "Strong overall fit on shared interests.",
-                }
-              : null,
-            alternates: candidateProfiles.slice(1, 3).map((c) => ({
-              wallet: c.wallet,
-              reason: c.preRankReasons?.[0] ?? "Worth a hello.",
-            })),
-            candidates: candidatesForClient,
-            fallback: true,
-          });
+          sendFallback(false);
         } else {
           send("result", { ...parsed, candidates: candidatesForClient, fallback: false });
         }
       } catch (e) {
-        send("error", (e as Error).message || "Agent failed");
+        const aborted = ac.signal.aborted || (e as Error).name === "AbortError";
+        if (aborted) {
+          sendFallback(true);
+        } else {
+          send("error", "Agent failed");
+        }
       } finally {
+        clearTimeout(timer);
         controller.close();
       }
     },

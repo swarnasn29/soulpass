@@ -12,6 +12,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button, Card, Pill, StatTile } from "@/components/ui";
 import { useSoulpass } from "@/hooks/useSoulpass";
 import { useGaslessTransaction } from "@/hooks/useGaslessTransaction";
+import { useApi } from "@/hooks/useApi";
 import { ixRegisterForEvent, ixCancelRegistration, decodeEvent, decodeRegistration } from "@/lib/program";
 import { connection, FEE_PAYER_PUBKEY, explorer } from "@/lib/solana";
 import { registrationPda } from "@/lib/pda";
@@ -39,6 +40,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
   const router = useRouter();
   const { ready, authenticated, isOnboarded, wallet, loading: userLoading } = useSoulpass();
   const { send } = useGaslessTransaction();
+  const { apiFetch } = useApi();
 
   const [meta, setMeta] = useState<EventMetadata | null>(null);
   const [onchain, setOnchain] = useState<EventAccount | null>(null);
@@ -74,6 +76,8 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
 
   useEffect(() => {
     if (!authenticated) return;
+    // refresh() updates state internally; this is the intended sync.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, authenticated, wallet?.address]);
@@ -98,17 +102,30 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
     setErr(null);
     setBusy("register");
     try {
-      const ix = ixRegisterForEvent({
-        attendee: new PublicKey(wallet.address),
-        feePayer: FEE_PAYER_PUBKEY,
-        eventAddr: new PublicKey(address),
-      });
-      await send({ instructions: [ix], walletAddress: wallet.address, walletProvider: wallet });
-      await fetch(`/api/events/${address}/participants`, {
+      const eventKey = new PublicKey(address);
+      const attendeeKey = new PublicKey(wallet.address);
+
+      // If a Registration PDA already exists, re-sending register_for_event
+      // fails with "account already in use" (system Allocate 0x0). Skip the
+      // on-chain tx in that case and just sync the off-chain participant row.
+      const [regKey] = registrationPda(eventKey, attendeeKey);
+      const existingReg = await connection.getAccountInfo(regKey);
+
+      if (!existingReg) {
+        const ix = ixRegisterForEvent({
+          attendee: attendeeKey,
+          feePayer: FEE_PAYER_PUBKEY,
+          eventAddr: eventKey,
+        });
+        await send({ instructions: [ix], walletAddress: wallet.address, walletProvider: wallet });
+      }
+
+      // Off-chain participant row — surface any failure so the organizer
+      // dashboard stays consistent with on-chain state.
+      await apiFetch(`/api/events/${address}/participants`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ attendeeAddress: wallet.address }),
-      }).catch(() => {});
+      });
       setRegisterPhase("idle");
       await refresh();
     } catch (e) {
@@ -265,7 +282,7 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
                         templateId={meta.matchSchema.templateId}
                         walletAddress={wallet.address}
                         submitLabel="Save & register"
-                        onSubmitted={() => void register()}
+                        onSubmitted={() => register()}
                       />
                     </div>
                     <button

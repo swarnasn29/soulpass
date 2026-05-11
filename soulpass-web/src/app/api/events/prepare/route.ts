@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { uploadJson } from "@/lib/arweave";
+import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    await requireWallet(req, organizer);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
+    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
+    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+  }
+
+  try {
     const result = await uploadJson(
       { schema: "soulpass.event.v1", ...body, pinnedAt: Date.now() },
       [
@@ -30,6 +39,11 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json(result);
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    // Don't leak internals: arweave / fee-payer errors can mention paths or amounts.
+    const msg = (e as Error).message ?? "Pin failed";
+    const safe = /insufficient|not enough/i.test(msg)
+      ? "Storage funding insufficient. Try again later."
+      : "Failed to pin metadata";
+    return NextResponse.json({ error: safe }, { status: 500 });
   }
 }

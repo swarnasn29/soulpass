@@ -8,6 +8,7 @@ import {
   getTemplate,
   type MatchDimension,
 } from "@/lib/matchTemplates";
+import { useApi } from "@/hooks/useApi";
 import type { StoredTraitValue, UserTraitEntry } from "@/lib/eventMetaStore";
 
 type TraitsMap = Record<string, { value: StoredTraitValue; source: UserTraitEntry["source"]; updatedAt?: number }>;
@@ -21,7 +22,7 @@ type Props = {
   // Whether the user MUST answer required dimensions before this can submit.
   enforceRequired?: boolean;
   submitLabel?: string;
-  onSubmitted?: (traits: TraitsMap) => void;
+  onSubmitted?: (traits: TraitsMap) => void | Promise<void>;
   // External traits prop overrides the fetch (useful for /profile/matching where
   // the parent already has the data).
   initialTraits?: TraitsMap;
@@ -65,6 +66,7 @@ export function MatchmakingForm({
   const [loading, setLoading] = useState(!initialTraits);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const { apiFetch } = useApi();
 
   // Load current traits + suggestions once.
   useEffect(() => {
@@ -126,17 +128,15 @@ export function MatchmakingForm({
         if (!entry || !isFilled(d, entry.value as FieldValue)) continue;
         payload[d.traitKey] = { value: entry.value, source: entry.source ?? "user" };
       }
-      const res = await fetch(`/api/users/${walletAddress}/traits`, {
+      const res = await apiFetch(`/api/users/${walletAddress}/traits`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ traits: payload }),
       });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? "Failed to save");
-      }
       const data = await res.json();
-      onSubmitted?.(data.traits ?? {});
+      // Await onSubmitted so the parent (e.g., on-chain register tx) finishes
+      // before we clear the loading state — otherwise the button looks done
+      // while the register tx is still in flight.
+      await onSubmitted?.(data.traits ?? {});
     } catch (e) {
       setErr((e as Error).message);
     } finally {

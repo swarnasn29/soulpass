@@ -36,6 +36,7 @@ import { ImageUpload, type ImageUploadValue } from "@/components/ImageUpload";
 import { cn } from "@/lib/cn";
 import { useSoulpass } from "@/hooks/useSoulpass";
 import { useGaslessTransaction } from "@/hooks/useGaslessTransaction";
+import { useApi } from "@/hooks/useApi";
 import { ixCreateEvent } from "@/lib/program";
 import { FEE_PAYER_PUBKEY } from "@/lib/solana";
 import { PublicKey } from "@solana/web3.js";
@@ -105,6 +106,7 @@ export default function NewEventPage() {
   const router = useRouter();
   const { ready, authenticated, isOnboarded, wallet, loading: userLoading } = useSoulpass();
   const { send } = useGaslessTransaction();
+  const { apiFetch } = useApi();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -264,9 +266,8 @@ export default function NewEventPage() {
       // back to empty string so a transient Arweave failure never blocks publishing.
       let metadataUri = "";
       try {
-        const prepRes = await fetch("/api/events/prepare", {
+        const prepRes = await apiFetch("/api/events/prepare", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             organizer: wallet.address,
             eventId: eventId.toString(),
@@ -292,10 +293,8 @@ export default function NewEventPage() {
             },
           }),
         });
-        if (prepRes.ok) {
-          const prep = (await prepRes.json()) as { arUri?: string };
-          if (prep.arUri) metadataUri = prep.arUri;
-        }
+        const prep = (await prepRes.json()) as { arUri?: string };
+        if (prep.arUri) metadataUri = prep.arUri;
       } catch {
         // Non-fatal — we still publish; /api/events will retry the pin.
       }
@@ -319,9 +318,8 @@ export default function NewEventPage() {
       });
 
       const payload = buildPayload(eventId, eventAddr.toBase58(), "published");
-      await fetch("/api/events", {
+      await apiFetch("/api/events", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, metadataUri: metadataUri || undefined }),
       });
 
@@ -341,12 +339,10 @@ export default function NewEventPage() {
       validate(false);
       const eventId = BigInt(Date.now());
       const address = `draft:${wallet.address}:${eventId.toString()}`;
-      const res = await fetch("/api/events", {
+      await apiFetch("/api/events", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildPayload(eventId, address, "draft")),
       });
-      if (!res.ok) throw new Error("Failed to save draft.");
       router.push("/profile");
     } catch (e) {
       setErr((e as Error).message);

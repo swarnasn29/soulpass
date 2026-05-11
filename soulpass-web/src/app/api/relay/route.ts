@@ -2,31 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { Connection, VersionedTransaction, Transaction, clusterApiUrl } from "@solana/web3.js";
 import { SOULPASS_PROGRAM_ID } from "@/lib/solana";
 import { getFeePayer } from "@/lib/feePayer";
+import { ForbiddenError, UnauthorizedError, requireSession } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Coarse per-IP rate limiting — production-grade would use Redis.
-const buckets = new Map<string, { count: number; reset: number }>();
-const LIMIT = 30;
-const WINDOW_MS = 60_000;
-
-function rateLimit(ip: string): boolean {
-  const now = Date.now();
-  const b = buckets.get(ip);
-  if (!b || now > b.reset) {
-    buckets.set(ip, { count: 1, reset: now + WINDOW_MS });
-    return true;
-  }
-  if (b.count >= LIMIT) return false;
-  b.count++;
-  return true;
-}
-
 export async function POST(req: NextRequest) {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "anon";
-  if (!rateLimit(ip)) {
-    return NextResponse.json({ error: "Rate limit exceeded — try again in a minute." }, { status: 429 });
+  // Auth gate — Privy session required. The fee-payer wallet pays SOL for every
+  // relay, so unauthenticated submissions would let any visitor drain the wallet.
+  try {
+    await requireSession(req);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
+    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
+    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
   }
 
   let body: { transaction?: string; versioned?: boolean } | null = null;
@@ -46,7 +35,11 @@ export async function POST(req: NextRequest) {
   try {
     feePayer = getFeePayer();
   } catch (e) {
-    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    // Don't leak the underlying error — could mention key paths or env names.
+    const msg = (e as Error).message?.includes("FEE_PAYER_SECRET_KEY")
+      ? "Fee-payer not configured"
+      : "Server misconfigured";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 
   const rpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || clusterApiUrl("devnet");
@@ -74,7 +67,6 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Verify the fee payer is our wallet
       const txFeePayer = staticKeys[0];
       if (txFeePayer !== feePayer.publicKey.toBase58()) {
         return NextResponse.json(
@@ -119,6 +111,8 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ signature: sig });
   } catch (err) {
+    // Surface only the program/preflight error — these are useful to clients
+    // and don't leak server internals.
     const message = err instanceof Error ? err.message : "Internal error";
     return NextResponse.json({ error: message }, { status: 500 });
   }

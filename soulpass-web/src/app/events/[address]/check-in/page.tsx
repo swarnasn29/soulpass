@@ -117,7 +117,7 @@ export default function CheckInPage({ params }: { params: Promise<{ address: str
       <h1 className="font-display text-3xl font-bold tracking-tight">
         {event ? event.title : "Check-in"}
       </h1>
-      <p className="mt-1 text-white/60">Scan an attendee's profile QR to check them in.</p>
+      <p className="mt-1 text-white/60">Scan an attendee&apos;s profile QR to check them in.</p>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2 flex flex-col items-center gap-4 py-12">
@@ -146,7 +146,7 @@ export default function CheckInPage({ params }: { params: Promise<{ address: str
             Or — let attendees scan you
           </span>
           <p className="mt-2 text-sm text-white/70">
-            They open SoulPass on their phone, scan this code, and they're in.
+            They open SoulPass on their phone, scan this code, and they&apos;re in.
           </p>
           <div className="mt-4 flex justify-center rounded-2xl border border-[var(--color-border)] bg-white p-4">
             <QRCode value={`soulpass-event:${address}`} fg="#08090A" bg="#FFFFFF" />

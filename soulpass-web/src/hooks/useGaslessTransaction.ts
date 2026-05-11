@@ -10,9 +10,11 @@ import {
 } from "@solana/web3.js";
 import { connection, FEE_PAYER_PUBKEY, SOLANA_NETWORK } from "@/lib/solana";
 import type { ConnectedStandardSolanaWallet } from "@privy-io/js-sdk-core";
+import { useApi } from "./useApi";
 
 export function useGaslessTransaction() {
   const { signTransaction } = useSignTransaction();
+  const { apiFetch } = useApi();
 
   const send = useCallback(
     async (params: {
@@ -40,18 +42,17 @@ export function useGaslessTransaction() {
         chain: `solana:${SOLANA_NETWORK}` as const,
       });
 
-      const res = await fetch("/api/relay", {
+      const res = await apiFetch("/api/relay", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transaction: Buffer.from(signedTransaction).toString("base64"),
           versioned: true,
         }),
+        // Relay can take longer than the 30s default during devnet congestion.
+        timeoutMs: 60_000,
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Relay failed");
-
+      const json = (await res.json()) as { signature: string };
       const sig: string = json.signature;
       const conf = await connection.confirmTransaction(sig, "confirmed");
       if (conf.value.err) {
@@ -59,7 +60,7 @@ export function useGaslessTransaction() {
       }
       return sig;
     },
-    [signTransaction],
+    [signTransaction, apiFetch],
   );
 
   return { send };

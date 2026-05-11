@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUser, upsertUser, type UserMetadata } from "@/lib/eventMetaStore";
+import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ authority:
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ authority: string }> }) {
   const { authority } = await ctx.params;
+
+  try {
+    await requireWallet(req, authority);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
+    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
+    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+  }
+
   const body = (await req.json()) as Partial<UserMetadata>;
   const existing = await getUser(authority);
 

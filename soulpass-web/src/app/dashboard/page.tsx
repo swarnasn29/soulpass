@@ -22,6 +22,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button, Input, Section } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { useSoulpass } from "@/hooks/useSoulpass";
+import { useApi } from "@/hooks/useApi";
 import { connection } from "@/lib/solana";
 import { decodeUserProfile } from "@/lib/program";
 import { userPda } from "@/lib/pda";
@@ -91,6 +92,7 @@ function formatRegisteredAt(ts: number) {
 export default function DashboardPage() {
   const router = useRouter();
   const { ready, authenticated, isOnboarded, wallet, loading: userLoading } = useSoulpass();
+  const { apiFetch } = useApi();
 
   const [events, setEvents] = useState<EventMetadata[] | null>(null);
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
@@ -243,15 +245,13 @@ export default function DashboardPage() {
     setBusy(`${attendee}:${status}`);
     setErr(null);
     try {
-      const resp = await fetch(
+      await apiFetch(
         `/api/events/${selectedAddress}/participants/${attendee}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status }),
         },
       );
-      if (!resp.ok) throw new Error("Failed to update status.");
       setParticipants((prev) =>
         (prev ?? []).map((p) =>
           p.attendeeAddress === attendee
@@ -273,9 +273,8 @@ export default function DashboardPage() {
     try {
       await Promise.all(
         Array.from(selected).map((addr) =>
-          fetch(`/api/events/${selectedAddress}/participants/${addr}`, {
+          apiFetch(`/api/events/${selectedAddress}/participants/${addr}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status }),
           }),
         ),

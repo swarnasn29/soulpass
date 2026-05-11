@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { ImagePlus, Loader2, Trash2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useApi } from "@/hooks/useApi";
 
 export type ImageUploadValue = {
   url: string; // gateway URL — what the UI renders
@@ -43,6 +44,7 @@ export function ImageUpload({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
+  const { apiFetch } = useApi();
 
   const upload = useCallback(
     async (file: File) => {
@@ -55,11 +57,12 @@ export function ImageUpload({
         if (owner) fd.append("owner", owner);
         if (eventAddress) fd.append("eventAddress", eventAddress);
 
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error(j.error || `Upload failed (${res.status})`);
-        }
+        // Uploads to Irys can take 30s+ for larger files; bump timeout.
+        const res = await apiFetch("/api/upload", {
+          method: "POST",
+          body: fd,
+          timeoutMs: 90_000,
+        });
         const j = (await res.json()) as ImageUploadValue;
         onChange({ url: j.url, arUri: j.arUri, txId: j.txId });
       } catch (e) {
@@ -68,7 +71,7 @@ export function ImageUpload({
         setBusy(false);
       }
     },
-    [kind, owner, eventAddress, onChange],
+    [kind, owner, eventAddress, onChange, apiFetch],
   );
 
   const onPick = (f: FileList | null) => {

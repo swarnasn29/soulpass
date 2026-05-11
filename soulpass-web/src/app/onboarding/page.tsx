@@ -11,14 +11,17 @@ import { Button, Input } from "@/components/ui";
 import { Wordmark } from "@/components/Logo";
 import { useSoulpass } from "@/hooks/useSoulpass";
 import { useGaslessTransaction } from "@/hooks/useGaslessTransaction";
-import { ixInitializeUser } from "@/lib/program";
-import { FEE_PAYER_PUBKEY } from "@/lib/solana";
+import { useApi } from "@/hooks/useApi";
+import { ixInitializeUser, ixUpdateProfile } from "@/lib/program";
+import { connection, FEE_PAYER_PUBKEY } from "@/lib/solana";
+import { userPda } from "@/lib/pda";
 import { PublicKey } from "@solana/web3.js";
 
 export default function OnboardingPage() {
   const router = useRouter();
   const { ready, authenticated, wallet, data, isOnboarded, refresh } = useSoulpass();
   const { send } = useGaslessTransaction();
+  const { apiFetch } = useApi();
 
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -43,11 +46,7 @@ export default function OnboardingPage() {
       fd.append("file", file);
       fd.append("kind", "avatar");
       fd.append("owner", wallet.address);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || "Avatar upload failed");
-      }
+      const res = await apiFetch("/api/upload", { method: "POST", body: fd });
       const j = (await res.json()) as { url: string; arUri: string };
       setAvatar({ url: j.url, arUri: j.arUri });
     } catch (e) {
@@ -85,9 +84,8 @@ export default function OnboardingPage() {
       const onchainUri = avatar?.arUri ?? avatarUrl;
 
       // 1) Save off-chain metadata
-      await fetch(`/api/users/${wallet.address}`, {
+      await apiFetch(`/api/users/${wallet.address}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
           avatar: avatarUrl,
@@ -96,8 +94,15 @@ export default function OnboardingPage() {
         }),
       });
 
-      // 2) On-chain UserProfile (gasless)
-      const ix = ixInitializeUser(authority, FEE_PAYER_PUBKEY, name.trim(), onchainUri.slice(0, 200));
+      // 2) On-chain UserProfile (gasless). The PDA may already exist from a
+      //    prior successful init whose off-chain row was lost — re-running
+      //    InitializeUser would fail with "account already in use", so check
+      //    first and route to update_user_profile in that case.
+      const [profilePda] = userPda(authority);
+      const existing = await connection.getAccountInfo(profilePda);
+      const ix = existing
+        ? ixUpdateProfile(authority, name.trim(), onchainUri.slice(0, 200))
+        : ixInitializeUser(authority, FEE_PAYER_PUBKEY, name.trim(), onchainUri.slice(0, 200));
       await send({
         instructions: [ix],
         walletAddress: wallet.address,

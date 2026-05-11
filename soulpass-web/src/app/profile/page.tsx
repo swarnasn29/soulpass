@@ -23,6 +23,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button, Card, Pill, Textarea } from "@/components/ui";
 import { QRCode } from "@/components/QRCode";
 import { useSoulpass } from "@/hooks/useSoulpass";
+import { useApi } from "@/hooks/useApi";
 import { connection, explorer } from "@/lib/solana";
 import { BADGE_KIND, decodeRegistration } from "@/lib/program";
 import { registrationPda } from "@/lib/pda";
@@ -50,6 +51,7 @@ type Attended = EventMetadata & { checkedIn: boolean };
 export default function ProfilePage() {
   const router = useRouter();
   const { ready, authenticated, isOnboarded, data, loading, refresh } = useSoulpass();
+  const { apiFetch } = useApi();
 
   const [editingBio, setEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
@@ -70,15 +72,10 @@ export default function ProfilePage() {
       fd.append("file", file);
       fd.append("kind", "avatar");
       fd.append("owner", data.authority);
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || "Avatar upload failed");
-      }
+      const res = await apiFetch("/api/upload", { method: "POST", body: fd });
       const j = (await res.json()) as { url: string; arUri: string };
-      await fetch(`/api/users/${data.authority}`, {
+      await apiFetch(`/api/users/${data.authority}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ avatar: j.url, avatarArUri: j.arUri }),
       });
       await refresh();
@@ -102,6 +99,10 @@ export default function ProfilePage() {
   }, [ready, authenticated, loading, isOnboarded, router]);
 
   useEffect(() => {
+    // Reset the editor draft whenever the saved bio changes (e.g. on first
+    // load, or after a save round-trips). Direct setState in effect is the
+    // intentional pattern here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setBioDraft(data?.meta?.bio ?? "");
   }, [data?.meta?.bio]);
 
@@ -163,12 +164,10 @@ export default function ProfilePage() {
     if (!data?.authority) return;
     setSavingBio(true);
     try {
-      const res = await fetch(`/api/users/${data.authority}`, {
+      await apiFetch(`/api/users/${data.authority}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bio: bioDraft.slice(0, 280) }),
       });
-      if (!res.ok) throw new Error("Failed to save");
       await refresh();
       setEditingBio(false);
     } finally {
@@ -385,7 +384,7 @@ export default function ProfilePage() {
         <div className="flex items-end justify-between">
           <div>
             <h2 className="font-display text-2xl font-bold tracking-tight">Events organized</h2>
-            <p className="mt-1 text-sm text-white/60">Events you've hosted — published and drafts.</p>
+            <p className="mt-1 text-sm text-white/60">Events you&apos;ve hosted — published and drafts.</p>
           </div>
           <Link
             href="/events/new"
@@ -410,7 +409,7 @@ export default function ProfilePage() {
       {/* Events attended */}
       <section className="mt-10">
         <h2 className="font-display text-2xl font-bold tracking-tight">Events attended</h2>
-        <p className="mt-1 text-sm text-white/60">Events you've registered for or checked into.</p>
+        <p className="mt-1 text-sm text-white/60">Events you&apos;ve registered for or checked into.</p>
         <EventGrid
           events={attended}
           empty={

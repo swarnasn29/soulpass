@@ -9,6 +9,7 @@ import {
   type RegistrationStatus,
   type UserMetadata,
 } from "@/lib/eventMetaStore";
+import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ address: s
   if (!body.attendeeAddress) {
     return NextResponse.json({ error: "attendeeAddress required" }, { status: 400 });
   }
+
+  // Caller must be the wallet they're registering — no impersonation.
+  try {
+    await requireWallet(req, body.attendeeAddress);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
+    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
+    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+  }
+
   const existing = await getRegistration(address, body.attendeeAddress);
   const status: RegistrationStatus =
     body.status ?? existing?.status ?? (event.minReputation == null ? "approved" : "pending");

@@ -75,6 +75,11 @@ export function useSoulpass() {
     data,
     loading,
     refresh,
-    isOnboarded: !!meta && !!onchain,
+    // On-chain UserProfile is the source of truth — it's permanent. The
+    // off-chain Supabase row is auxiliary display data that can be backfilled
+    // any time. If we required both, a user who lost their DB row (or whose
+    // DB was wiped) would be looped back to onboarding and a retried
+    // InitializeUser would fail with "account already in use".
+    isOnboarded: !!onchain,
   };
 }

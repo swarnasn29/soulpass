@@ -12,6 +12,7 @@ import { decodeUserProfile } from "@/lib/program";
 import { PublicKey } from "@solana/web3.js";
 import { inferTraitPatch, suggestTraits } from "@/lib/traitInference";
 import { getTemplate } from "@/lib/matchTemplates";
+import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,6 +86,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ authority: 
 // Body: { traits: { [traitKey]: { value, source? } } }
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ authority: string }> }) {
   const { authority } = await ctx.params;
+
+  try {
+    await requireWallet(req, authority);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
+    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
+    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+  }
+
   const body = (await req.json()) as {
     traits?: Record<string, { value: StoredTraitValue; source?: UserTraitEntry["source"] }>;
   };
