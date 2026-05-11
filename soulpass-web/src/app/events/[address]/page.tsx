@@ -70,7 +70,24 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
     if (wallet) {
       const [regKey] = registrationPda(eventKey, new PublicKey(wallet.address));
       const regAcct = await connection.getAccountInfo(regKey);
-      setReg(regAcct ? decodeRegistration(regAcct.data) : null);
+      const decoded = regAcct ? decodeRegistration(regAcct.data) : null;
+      setReg(decoded);
+
+      // Backfill the off-chain participant row for any attendee whose on-chain
+      // registration predates the Supabase mirror. The endpoint is idempotent
+      // (upsert), so calling on every visit is safe and keeps the organizer
+      // dashboard in sync even on RPCs that don't allow getProgramAccounts.
+      if (decoded) {
+        void apiFetch(`/api/events/${address}/participants`, {
+          method: "POST",
+          body: JSON.stringify({
+            attendeeAddress: wallet.address,
+            registeredAt: Number(decoded.registeredAt) * 1000,
+          }),
+        }).catch(() => {
+          // Non-fatal — backfill will retry on next page visit.
+        });
+      }
     }
   };
 

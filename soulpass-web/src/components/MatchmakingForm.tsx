@@ -68,7 +68,10 @@ export function MatchmakingForm({
   const [err, setErr] = useState<string | null>(null);
   const { apiFetch } = useApi();
 
-  // Load current traits + suggestions once.
+  // Load current traits + suggestions once. Non-fatal — if the GET fails the
+  // user can still fill in the form from scratch (submit goes through PUT
+  // which has its own error surface). We don't show this error in the UI
+  // because a broken prefill shouldn't block registration.
   useEffect(() => {
     if (initialTraits) return;
     let cancelled = false;
@@ -78,11 +81,22 @@ export function MatchmakingForm({
           `/api/users/${walletAddress}/traits?templateId=${templateId}`,
           { cache: "no-store" },
         );
-        const data = await res.json();
         if (cancelled) return;
-        setTraits(data.traits ?? {});
+        if (!res.ok) {
+          console.warn(
+            `[matchmaking] traits GET ${res.status} — skipping prefill`,
+          );
+          return;
+        }
+        // Some edge runtimes / 5xx pages return an empty body even with a 2xx;
+        // parse as text first so we can fall back cleanly instead of throwing
+        // "Unexpected end of JSON input".
+        const text = await res.text();
+        if (!text) return;
+        const data = JSON.parse(text);
+        if (!cancelled) setTraits(data.traits ?? {});
       } catch (e) {
-        if (!cancelled) setErr((e as Error).message);
+        console.warn("[matchmaking] traits prefill failed:", (e as Error).message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -132,7 +146,10 @@ export function MatchmakingForm({
         method: "PUT",
         body: JSON.stringify({ traits: payload }),
       });
-      const data = await res.json();
+      // Tolerant of empty-body responses (some edge runtimes return 200 with
+      // no body even when the write succeeded server-side).
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
       // Await onSubmitted so the parent (e.g., on-chain register tx) finishes
       // before we clear the loading state — otherwise the button looks done
       // while the register tx is still in flight.
