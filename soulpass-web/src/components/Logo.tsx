@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 
 // The brand mark: an icon + the SOULPASS wordmark. Lives at
-// public/soulpass-wordmark.jpeg. The source asset is a JPEG on a pure-black
+// public/logo.jpeg. The source asset is a JPEG on a pure-black
 // background, so we composite with `mix-blend-mode: lighten` to drop the
 // black into whatever surface we're rendered on (the site bg is #08090A,
 // not pure #000, so a plain <img> would otherwise show a visible rectangle).
@@ -9,7 +9,7 @@ export function Wordmark({ className }: { className?: string }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/soulpass-wordmark.jpeg"
+      src="/logo.jpeg"
       alt="SoulPass"
       className={cn(
         "h-8 w-auto select-none",
@@ -36,7 +36,7 @@ export function Logo({ className }: { className?: string }) {
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/soulpass-wordmark.jpeg"
+        src="/logo.jpeg"
         alt=""
         className="h-full w-auto max-w-none mix-blend-lighten"
         draggable={false}

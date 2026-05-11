@@ -23,7 +23,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         appearance: {
           theme: "dark",
           accentColor: "#B5FF1A",
-          logo: "/soulpass-wordmark.jpeg",
+          logo: "/logo.jpeg",
           showWalletLoginFirst: false,
           walletList: ["phantom", "backpack"],
         },
