@@ -90,6 +90,20 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
+// <input type="datetime-local"> uses local-time YYYY-MM-DDTHH:MM. The
+// Date constructor's ISO output is UTC, so we shift by the timezone offset
+// before slicing to land on the user's wall-clock time.
+function tsToDatetimeLocal(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const off = d.getTimezoneOffset() * 60_000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
+}
+
+function datetimeLocalToTs(v: string): number {
+  return Math.floor(new Date(v).getTime() / 1000);
+}
+
 function formatRegisteredAt(ts: number) {
   const d = new Date(ts);
   return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${d
@@ -845,8 +859,11 @@ function SettingsTab({
 }) {
   const { apiFetch } = useApi();
 
+  const [title, setTitle] = useState(event.title);
   const [description, setDescription] = useState(event.description);
   const [location, setLocation] = useState(event.location);
+  const [startAt, setStartAt] = useState(tsToDatetimeLocal(event.startTs));
+  const [endAt, setEndAt] = useState(tsToDatetimeLocal(event.endTs));
   const [cover, setCover] = useState<ImageUploadValue | null>(
     event.cover ? { url: event.cover, arUri: event.coverArUri ?? "", txId: "" } : null,
   );
@@ -877,8 +894,11 @@ function SettingsTab({
   // When the user switches to a different event, reset the form to that
   // event's values so we're not editing stale state.
   useEffect(() => {
+    setTitle(event.title);
     setDescription(event.description);
     setLocation(event.location);
+    setStartAt(tsToDatetimeLocal(event.startTs));
+    setEndAt(tsToDatetimeLocal(event.endTs));
     setCover(event.cover ? { url: event.cover, arUri: event.coverArUri ?? "", txId: "" } : null);
     setVenueImage(
       event.venueImage
@@ -923,10 +943,18 @@ function SettingsTab({
     setOk(false);
     setSaving(true);
     try {
+      const startTs = startAt ? datetimeLocalToTs(startAt) : event.startTs;
+      const endTs = endAt ? datetimeLocalToTs(endAt) : event.endTs;
+      if (endTs <= startTs) {
+        throw new Error("End time must be after start time.");
+      }
       const body: Partial<EventMetadata> = {
         address: event.address,
+        title: title.trim() || event.title,
         description,
         location,
+        startTs,
+        endTs,
         cover: cover?.url ?? "",
         coverArUri: cover?.arUri || undefined,
         venueImage: venueImage?.url ?? "",
@@ -961,22 +989,54 @@ function SettingsTab({
 
   return (
     <div className="space-y-6">
-      {/* Immutable on-chain fields — show but disable editing */}
+      {/* Title */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Title
+        </div>
+        <Input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          maxLength={80}
+          placeholder="Event title"
+        />
+      </div>
+
+      {/* Dates */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Date & time
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Input
+            icon={Calendar}
+            type="datetime-local"
+            value={startAt}
+            onChange={(e) => setStartAt(e.target.value)}
+            aria-label="Starts"
+          />
+          <Input
+            icon={Calendar}
+            type="datetime-local"
+            value={endAt}
+            onChange={(e) => setEndAt(e.target.value)}
+            aria-label="Ends"
+          />
+        </div>
+      </div>
+
+      {/* On-chain reference — read-only */}
       <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white/50">
           <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-accent)]" />
-          Locked on-chain
+          Permanent on-chain record
         </div>
         <p className="mt-2 text-xs text-white/50">
-          Title, dates, and capacity are stored on Solana and can&apos;t be edited.
+          The original details written to Solana at create time. Editing
+          above changes what attendees see — the on-chain record below is
+          unchanged. Capacity is enforced on-chain and can&apos;t be edited.
         </p>
-        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
-              Title
-            </div>
-            <div className="truncate">{event.title}</div>
-          </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
               Capacity
@@ -985,15 +1045,9 @@ function SettingsTab({
           </div>
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
-              Starts
+              Created
             </div>
-            <div>{new Date(event.startTs * 1000).toLocaleString()}</div>
-          </div>
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
-              Ends
-            </div>
-            <div>{new Date(event.endTs * 1000).toLocaleString()}</div>
+            <div>{new Date(event.createdAt).toLocaleDateString()}</div>
           </div>
         </div>
       </div>

@@ -100,8 +100,10 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
   }, [address, authenticated, wallet?.address]);
 
   const isOrganizer = wallet && onchain && wallet.address === onchain.organizer.toBase58();
-  const startTs = onchain ? Number(onchain.startTs) : meta?.startTs ?? 0;
-  const endTs = onchain ? Number(onchain.endTs) : meta?.endTs ?? 0;
+  // Off-chain metadata is the live display source — organizers can reschedule
+  // (the on-chain timestamps stay as the permanent original).
+  const startTs = meta?.startTs ?? (onchain ? Number(onchain.startTs) : 0);
+  const endTs = meta?.endTs ?? (onchain ? Number(onchain.endTs) : 0);
   const isFull = onchain ? onchain.attendeeCount >= onchain.capacity : false;
   // eslint-disable-next-line react-hooks/purity
   const eventStarted = Math.floor(Date.now() / 1000) >= startTs;

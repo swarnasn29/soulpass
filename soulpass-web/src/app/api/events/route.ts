@@ -73,18 +73,34 @@ export async function POST(req: NextRequest) {
     return { enabled: !!tplId, templateId: tplId };
   })();
 
+  // Validate dates if either is being changed, so a typo can't flip end<start.
+  const nextStartTs =
+    typeof body.startTs === "number" && Number.isFinite(body.startTs)
+      ? body.startTs
+      : existing?.startTs ?? body.startTs!;
+  const nextEndTs =
+    typeof body.endTs === "number" && Number.isFinite(body.endTs)
+      ? body.endTs
+      : existing?.endTs ?? body.endTs!;
+  if (nextEndTs <= nextStartTs) {
+    return NextResponse.json({ error: "End time must be after start time" }, { status: 400 });
+  }
+
   const meta: EventMetadata = {
     address: body.address!,
     organizer,
-    // On-chain immutables: never overwrite from edits, fall back to existing.
+    // Truly immutable identifiers — set once at create, never overwritten.
     eventId: existing?.eventId ?? body.eventId!,
-    title: existing ? existing.title : body.title!,
-    startTs: existing ? existing.startTs : body.startTs!,
-    endTs: existing ? existing.endTs : body.endTs!,
-    capacity: existing ? existing.capacity : body.capacity!,
+    capacity: existing?.capacity ?? body.capacity!,
     createdAt: existing?.createdAt ?? Date.now(),
-    // Off-chain editable:
+    // Title / description / dates are duplicated on-chain at create time but
+    // the off-chain mirror is the live, editable source of truth. The on-chain
+    // record stays as the permanent original (visible on Solana Explorer).
+    title: typeof body.title === "string" && body.title.trim() ? body.title : existing?.title ?? body.title!,
     description: body.description ?? existing?.description ?? "",
+    startTs: nextStartTs,
+    endTs: nextEndTs,
+    // Off-chain editable:
     cover: body.cover ?? existing?.cover ?? "",
     coverArUri: body.coverArUri ?? existing?.coverArUri,
     venueImage: body.venueImage ?? existing?.venueImage ?? "",
