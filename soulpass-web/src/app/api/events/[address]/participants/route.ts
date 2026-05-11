@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import bs58 from "bs58";
+import { PublicKey } from "@solana/web3.js";
 import {
   getEvent,
   getRegistration,
@@ -14,6 +15,8 @@ import {
 import { authErrorResponse, requireWallet } from "@/lib/auth";
 import { connection, SOULPASS_PROGRAM_ID } from "@/lib/solana";
 import { ACCOUNT_DISCRIMINATORS, decodeRegistration } from "@/lib/program";
+import { instructionDiscriminator } from "@/lib/discriminator";
+import { registrationPda } from "@/lib/pda";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,9 +28,13 @@ type ParticipantPayload = RegistrationMetadata & {
 };
 
 const REG_DISCRIMINATOR_B58 = bs58.encode(ACCOUNT_DISCRIMINATORS.registration);
+const REGISTER_IX_DISCRIMINATOR = instructionDiscriminator("register_for_event");
 // Registration layout: [8 disc][32 attendee][32 event][...] — the event pubkey
 // starts at byte 40, which is what we filter on to fetch only this event's regs.
 const EVENT_FIELD_OFFSET = 40;
+// Per ixRegisterForEvent: keys are [reg, eventAddr, attendee, feePayer, sys].
+// The attendee account sits at index 2 in the instruction's account keys.
+const REGISTER_ATTENDEE_INDEX = 2;
 
 type OnchainReg = {
   attendee: string;
@@ -36,31 +43,145 @@ type OnchainReg = {
   checkedInAt: number; // ms
 };
 
-async function fetchOnchainRegistrations(eventAddress: string): Promise<OnchainReg[]> {
-  try {
-    const accounts = await connection.getProgramAccounts(SOULPASS_PROGRAM_ID, {
-      commitment: "confirmed",
-      filters: [
-        { memcmp: { offset: 0, bytes: REG_DISCRIMINATOR_B58 } },
-        { memcmp: { offset: EVENT_FIELD_OFFSET, bytes: eventAddress } },
-      ],
+async function fetchViaProgramAccounts(eventAddress: string): Promise<OnchainReg[]> {
+  const accounts = await connection.getProgramAccounts(SOULPASS_PROGRAM_ID, {
+    commitment: "confirmed",
+    filters: [
+      { memcmp: { offset: 0, bytes: REG_DISCRIMINATOR_B58 } },
+      { memcmp: { offset: EVENT_FIELD_OFFSET, bytes: eventAddress } },
+    ],
+  });
+  const out: OnchainReg[] = [];
+  for (const a of accounts) {
+    const dec = decodeRegistration(a.account.data as Buffer);
+    if (!dec) continue;
+    out.push({
+      attendee: dec.attendee.toBase58(),
+      registeredAt: Number(dec.registeredAt) * 1000,
+      checkedIn: dec.checkedIn,
+      checkedInAt: Number(dec.checkedInAt) * 1000,
     });
-    const out: OnchainReg[] = [];
-    for (const a of accounts) {
-      const dec = decodeRegistration(a.account.data as Buffer);
-      if (!dec) continue;
-      out.push({
-        attendee: dec.attendee.toBase58(),
-        registeredAt: Number(dec.registeredAt) * 1000,
-        checkedIn: dec.checkedIn,
-        checkedInAt: Number(dec.checkedInAt) * 1000,
-      });
+  }
+  return out;
+}
+
+// Public devnet rejects getProgramAccounts. As a fallback, walk the
+// signatures that touched this event PDA, find register_for_event calls,
+// and verify each candidate's Registration PDA still exists. This is
+// O(N) tx fetches but works on any RPC that supports the basic methods.
+async function fetchViaSignatures(eventAddress: string): Promise<OnchainReg[]> {
+  const eventKey = new PublicKey(eventAddress);
+  const sigs = await connection.getSignaturesForAddress(
+    eventKey,
+    { limit: 1000 },
+    "confirmed",
+  );
+  if (sigs.length === 0) return [];
+
+  const txs = await Promise.all(
+    sigs.map((s) =>
+      connection
+        .getTransaction(s.signature, {
+          maxSupportedTransactionVersion: 0,
+          commitment: "confirmed",
+        })
+        .catch(() => null),
+    ),
+  );
+
+  const programId = SOULPASS_PROGRAM_ID.toBase58();
+  const candidates = new Set<string>();
+  for (const tx of txs) {
+    if (!tx || tx.meta?.err) continue;
+    const message = tx.transaction.message;
+    const keys = message.getAccountKeys
+      ? message.getAccountKeys().staticAccountKeys.map((k) => k.toBase58())
+      : (message as unknown as { accountKeys: PublicKey[] }).accountKeys.map((k) =>
+          k.toBase58(),
+        );
+    const compiled =
+      "compiledInstructions" in message
+        ? message.compiledInstructions
+        : (message as unknown as {
+            instructions: Array<{
+              programIdIndex: number;
+              accountKeyIndexes?: number[];
+              accounts?: number[];
+              data: string | Uint8Array;
+            }>;
+          }).instructions;
+
+    for (const ix of compiled) {
+      if (keys[ix.programIdIndex] !== programId) continue;
+      const data =
+        typeof ix.data === "string"
+          ? bs58.decode(ix.data)
+          : new Uint8Array(ix.data);
+      if (data.length < REGISTER_IX_DISCRIMINATOR.length) continue;
+      let matches = true;
+      for (let i = 0; i < REGISTER_IX_DISCRIMINATOR.length; i++) {
+        if (data[i] !== REGISTER_IX_DISCRIMINATOR[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (!matches) continue;
+      const idxList =
+        "accountKeyIndexes" in ix && ix.accountKeyIndexes
+          ? ix.accountKeyIndexes
+          : (ix as { accounts?: number[] }).accounts;
+      if (!idxList || idxList.length <= REGISTER_ATTENDEE_INDEX) continue;
+      const attendee = keys[idxList[REGISTER_ATTENDEE_INDEX]];
+      if (attendee) candidates.add(attendee);
     }
-    return out;
+  }
+
+  if (candidates.size === 0) return [];
+
+  // Batch-verify each candidate's Registration PDA so we don't show
+  // cancelled regs (closed PDAs return null from getAccountInfo).
+  const attendees = [...candidates];
+  const pdas = attendees.map(
+    (a) => registrationPda(eventKey, new PublicKey(a))[0],
+  );
+  const infos: Array<{ data: Buffer } | null> = [];
+  for (let i = 0; i < pdas.length; i += 100) {
+    const chunk = pdas.slice(i, i + 100);
+    const got = await connection.getMultipleAccountsInfo(chunk, "confirmed");
+    for (const g of got) infos.push(g as { data: Buffer } | null);
+  }
+
+  const out: OnchainReg[] = [];
+  attendees.forEach((attendee, i) => {
+    const info = infos[i];
+    if (!info) return;
+    const dec = decodeRegistration(info.data);
+    if (!dec) return;
+    out.push({
+      attendee,
+      registeredAt: Number(dec.registeredAt) * 1000,
+      checkedIn: dec.checkedIn,
+      checkedInAt: Number(dec.checkedInAt) * 1000,
+    });
+  });
+  return out;
+}
+
+async function fetchOnchainRegistrations(eventAddress: string): Promise<OnchainReg[]> {
+  // Fast path: getProgramAccounts with filters. Helius/QuickNode allow it.
+  try {
+    return await fetchViaProgramAccounts(eventAddress);
   } catch (e) {
-    // Public RPC may rate-limit getProgramAccounts. Fall back to off-chain
-    // rows only — better partial data than a 500.
-    console.warn("[participants] getProgramAccounts failed:", (e as Error).message);
+    console.warn(
+      "[participants] getProgramAccounts failed, falling back to signatures:",
+      (e as Error).message,
+    );
+  }
+  // Fallback: works on public devnet (which rejects gpa).
+  try {
+    return await fetchViaSignatures(eventAddress);
+  } catch (e) {
+    console.warn("[participants] signatures fallback failed:", (e as Error).message);
     return [];
   }
 }
