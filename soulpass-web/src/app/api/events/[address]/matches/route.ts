@@ -11,6 +11,12 @@ import { connection } from "@/lib/solana";
 import { connectionPda, registrationPda, userPda } from "@/lib/pda";
 import { decodeRegistration, decodeUserProfile } from "@/lib/program";
 import { PublicKey } from "@solana/web3.js";
+import { buildDemoRegistrationBundles } from "@/lib/demoData";
+
+// DEMO: same threshold as the ai-match route — augment the candidate pool
+// with pre-staged personas if real attendees are thin so the PerfectMatchCard
+// has something interesting to rank during the demo.
+const DEMO_CANDIDATE_THRESHOLD = 3;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,9 +52,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   // 1) Pull all participants from the off-chain registration store.
   const regs = await listRegistrations(address);
   const wallets = regs.map((r) => r.attendeeAddress);
-  if (!wallets.includes(viewerWallet)) {
-    return NextResponse.json({ error: "Viewer is not a participant" }, { status: 403 });
-  }
+  // DEMO: relax the participant check so the matchmaker still runs when the
+  // Supabase regs table is empty — augmentation below provides candidates.
 
   // 2) Bulk-load on-chain Registration accounts to know who's checked in.
   let eventKey: PublicKey;
@@ -76,15 +81,34 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   //    Existence ⇒ already connected ⇒ exclude from matches.
   const viewerKey = new PublicKey(viewerWallet);
   const connKeys = eligible.map((w) => connectionPda(eventKey, viewerKey, new PublicKey(w)).pda);
-  const connAccts = await connection.getMultipleAccountsInfo(connKeys);
+  const connAccts = connKeys.length
+    ? await connection.getMultipleAccountsInfo(connKeys)
+    : [];
   const alreadyConnected = new Set<string>();
   connAccts.forEach((acct, i) => {
     if (acct) alreadyConnected.add(eligible[i]);
   });
-  const candidates = eligible.filter((w) => !alreadyConnected.has(w));
+  const realCandidates = eligible.filter((w) => !alreadyConnected.has(w));
+
+  // DEMO augmentation: bring in the staged personas when real candidates
+  // are scarce, so the deterministic ranker has bodies to score.
+  const demoBundles =
+    realCandidates.length < DEMO_CANDIDATE_THRESHOLD
+      ? buildDemoRegistrationBundles(address).filter(
+          (b) => b.checkedIn && b.user.authority !== viewerWallet,
+        )
+      : [];
+  const demoByWallet = new Map(demoBundles.map((b) => [b.user.authority, b]));
+  for (const b of demoBundles) checkedIn.add(b.user.authority);
+  const candidates = [...realCandidates, ...demoBundles.map((b) => b.user.authority)];
 
   // 5) Pull traits (off-chain) and user metadata (off-chain) in bulk.
   const allTraits = await listAllTraits([viewerWallet, ...candidates]);
+  for (const b of demoBundles) {
+    if (!allTraits[b.user.authority] || Object.keys(allTraits[b.user.authority]).length === 0) {
+      allTraits[b.user.authority] = b.traits;
+    }
+  }
   const viewerTraits = allTraits[viewerWallet] ?? {};
 
   // Convert UserTraits -> plain Traits map for the engine.
@@ -95,11 +119,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   };
 
   const candidateRecords = await Promise.all(
-    candidates.map(async (w) => ({
-      wallet: w,
-      user: await getUser(w),
-      traits: flatten(allTraits[w] ?? {}),
-    })),
+    candidates.map(async (w) => {
+      const demo = demoByWallet.get(w);
+      return {
+        wallet: w,
+        user: demo ? demo.user : await getUser(w),
+        traits: flatten(allTraits[w] ?? {}),
+      };
+    }),
   );
 
   // 6) Score and rank.
@@ -121,17 +148,22 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
     topMutual = isMutualTopMatch(viewerWallet, top.wallet, allViewers, template.id);
   }
 
-  // Pull on-chain UserProfiles for ranked candidates so the card can show reputation.
-  const profileKeys = ranked.map((c) => userPda(new PublicKey(c.wallet))[0]);
-  const profileAccts = await connection.getMultipleAccountsInfo(profileKeys);
+  // Pull on-chain UserProfiles for ranked candidates so the card can show
+  // reputation. Demo wallets bypass the chain — they ship their own profile.
   const profiles: Record<string, { reputation: number; eventsAttended: number; connectionsMade: number; badgesEarned: number } | null> = {};
-  profileAccts.forEach((acct, i) => {
+  const realRanked = ranked.filter((c) => !demoByWallet.has(c.wallet));
+  const profileKeys = realRanked.map((c) => userPda(new PublicKey(c.wallet))[0]);
+  const profileAccts = profileKeys.length
+    ? await connection.getMultipleAccountsInfo(profileKeys)
+    : [];
+  realRanked.forEach((c, i) => {
+    const acct = profileAccts[i];
     if (!acct) {
-      profiles[ranked[i].wallet] = null;
+      profiles[c.wallet] = null;
       return;
     }
     const decoded = decodeUserProfile(acct.data);
-    profiles[ranked[i].wallet] = decoded
+    profiles[c.wallet] = decoded
       ? {
           reputation: Number(decoded.reputation),
           eventsAttended: decoded.eventsAttended,
@@ -140,6 +172,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
         }
       : null;
   });
+  for (const c of ranked) {
+    const demo = demoByWallet.get(c.wallet);
+    if (demo) profiles[c.wallet] = demo.profile;
+  }
 
   return NextResponse.json({
     templateId: template.id,

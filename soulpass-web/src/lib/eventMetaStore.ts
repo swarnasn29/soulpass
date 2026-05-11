@@ -186,6 +186,14 @@ function rowToReg(r: RegRow): RegistrationMetadata {
 
 // --- Events ---------------------------------------------------------------
 
+// Read-path errors from Supabase (missing table, wrong column, RLS) should
+// degrade gracefully — the app has fallbacks (on-chain data, demo mocks,
+// "not found" pages). Logging the real reason makes server debugging easy
+// without crashing user-facing pages.
+function warnSb(scope: string, message: string) {
+  console.warn(`[supabase] ${scope}: ${message}`);
+}
+
 export async function listEvents(opts?: {
   includeDrafts?: boolean;
   organizer?: string;
@@ -195,14 +203,20 @@ export async function listEvents(opts?: {
   if (!opts?.includeDrafts) q = q.eq("status", "published");
   if (opts?.organizer) q = q.eq("organizer", opts.organizer);
   const { data, error } = await q;
-  if (error) throw new Error(`listEvents: ${error.message}`);
+  if (error) {
+    warnSb("listEvents", error.message);
+    return [];
+  }
   return (data ?? []).map((r) => rowToEvent(r as EventRow));
 }
 
 export async function getEvent(address: string): Promise<EventMetadata | null> {
   const sb = getSupabase();
   const { data, error } = await sb.from("events").select("*").eq("address", address).maybeSingle();
-  if (error) throw new Error(`getEvent: ${error.message}`);
+  if (error) {
+    warnSb("getEvent", error.message);
+    return null;
+  }
   return data ? rowToEvent(data as EventRow) : null;
 }
 
@@ -217,7 +231,10 @@ export async function upsertEvent(meta: EventMetadata): Promise<void> {
 export async function getUser(authority: string): Promise<UserMetadata | null> {
   const sb = getSupabase();
   const { data, error } = await sb.from("users").select("*").eq("authority", authority).maybeSingle();
-  if (error) throw new Error(`getUser: ${error.message}`);
+  if (error) {
+    warnSb("getUser", error.message);
+    return null;
+  }
   return data ? rowToUser(data as UserRow) : null;
 }
 
@@ -225,7 +242,10 @@ export async function getUsers(authorities: string[]): Promise<Map<string, UserM
   if (authorities.length === 0) return new Map();
   const sb = getSupabase();
   const { data, error } = await sb.from("users").select("*").in("authority", authorities);
-  if (error) throw new Error(`getUsers: ${error.message}`);
+  if (error) {
+    warnSb("getUsers", error.message);
+    return new Map();
+  }
   const map = new Map<string, UserMetadata>();
   for (const row of data ?? []) map.set((row as UserRow).authority, rowToUser(row as UserRow));
   return map;
@@ -273,7 +293,10 @@ export async function listRegistrations(eventAddress: string): Promise<Registrat
     .select("*")
     .eq("event_address", eventAddress)
     .order("registered_at", { ascending: false });
-  if (error) throw new Error(`listRegistrations: ${error.message}`);
+  if (error) {
+    warnSb("listRegistrations", error.message);
+    return [];
+  }
   return (data ?? []).map((r) => rowToReg(r as RegRow));
 }
 
@@ -288,7 +311,10 @@ export async function getRegistration(
     .eq("event_address", eventAddress)
     .eq("attendee_address", attendeeAddress)
     .maybeSingle();
-  if (error) throw new Error(`getRegistration: ${error.message}`);
+  if (error) {
+    warnSb("getRegistration", error.message);
+    return null;
+  }
   return data ? rowToReg(data as RegRow) : null;
 }
 
@@ -318,7 +344,10 @@ export async function getUserTraits(authority: string): Promise<UserTraits> {
     .select("data")
     .eq("authority", authority)
     .maybeSingle();
-  if (error) throw new Error(`getUserTraits: ${error.message}`);
+  if (error) {
+    warnSb("getUserTraits", error.message);
+    return {};
+  }
   return (data?.data as UserTraits) ?? {};
 }
 
@@ -346,7 +375,12 @@ export async function listAllTraits(authorities: string[]): Promise<Record<strin
     .from("user_traits")
     .select("authority, data")
     .in("authority", authorities);
-  if (error) throw new Error(`listAllTraits: ${error.message}`);
+  if (error) {
+    warnSb("listAllTraits", error.message);
+    const empty: Record<string, UserTraits> = {};
+    for (const a of authorities) empty[a] = {};
+    return empty;
+  }
   const out: Record<string, UserTraits> = {};
   for (const a of authorities) out[a] = {};
   for (const row of data ?? []) {

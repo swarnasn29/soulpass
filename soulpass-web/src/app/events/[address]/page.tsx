@@ -375,7 +375,9 @@ export default function EventDetailPage({ params }: { params: Promise<{ address:
         </Card>
       </motion.div>
 
-      {meta?.matchSchema?.enabled && meta.matchSchema.templateId && reg?.checkedIn && wallet && (
+      {/* Demo: show AI matchmaking as soon as the event has it enabled — we
+          no longer gate on reg?.checkedIn so judges can see it pre-event. */}
+      {meta?.matchSchema?.enabled && meta.matchSchema.templateId && wallet && (
         <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
           <AIMatchPanel
             eventAddress={address}

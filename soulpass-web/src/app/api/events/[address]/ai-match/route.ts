@@ -18,6 +18,12 @@ import {
   streamMatch,
   type AgentProfile,
 } from "@/lib/aiAgent";
+import { buildDemoRegistrationBundles } from "@/lib/demoData";
+
+// DEMO: when the live attendee pool is thin, augment the candidate set with
+// pre-staged demo personas so the matchmaker has bodies to reason over.
+// Threshold low enough that we never displace real candidates when they exist.
+const DEMO_CANDIDATE_THRESHOLD = 3;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,7 +58,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   // exclude already-connected pairs, fetch traits + on-chain rep.
   const regs = await listRegistrations(address);
   const wallets = regs.map((r) => r.attendeeAddress);
-  if (!wallets.includes(viewerWallet)) return sse({ error: "Viewer is not a participant" });
+  // DEMO mode: don't error if the viewer isn't in real regs — we'll augment
+  // the candidate set with demo bundles below so the matchmaker still runs.
+  // The viewer's own profile gets best-effort lookup, falling back to empty.
 
   let eventKey: PublicKey;
   try {
@@ -81,7 +89,22 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   connAccts.forEach((acct, i) => {
     if (acct) alreadyConnected.add(eligible[i]);
   });
-  const candidateWallets = eligible.filter((w) => !alreadyConnected.has(w));
+  const realCandidateWallets = eligible.filter((w) => !alreadyConnected.has(w));
+
+  // DEMO augmentation — bring in the staged personas if real candidates are
+  // thin. Demo bundles ship their own user/traits/profile so we skip on-chain
+  // lookups for those wallets later in the route.
+  const demoBundles =
+    realCandidateWallets.length < DEMO_CANDIDATE_THRESHOLD
+      ? buildDemoRegistrationBundles(address).filter(
+          (b) => b.checkedIn && b.user.authority !== viewerWallet,
+        )
+      : [];
+  const demoByWallet = new Map(demoBundles.map((b) => [b.user.authority, b]));
+  const candidateWallets = [
+    ...realCandidateWallets,
+    ...demoBundles.map((b) => b.user.authority),
+  ];
 
   if (candidateWallets.length === 0) {
     return sse({
@@ -91,6 +114,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   }
 
   const allTraits = await listAllTraits([viewerWallet, ...candidateWallets]);
+  // Layer demo trait profiles on top for any demo wallets — Supabase won't
+  // have rows for them but the bundles do.
+  for (const b of demoBundles) {
+    if (!allTraits[b.user.authority] || Object.keys(allTraits[b.user.authority]).length === 0) {
+      allTraits[b.user.authority] = b.traits;
+    }
+  }
   const flatten = (t: typeof allTraits[string] | undefined): Traits => {
     const out: Traits = {};
     if (!t) return out;
@@ -99,11 +129,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   };
 
   const candidateRecords = await Promise.all(
-    candidateWallets.map(async (w) => ({
-      wallet: w,
-      user: await getUser(w),
-      traits: flatten(allTraits[w]),
-    })),
+    candidateWallets.map(async (w) => {
+      const demo = demoByWallet.get(w);
+      return {
+        wallet: w,
+        user: demo ? demo.user : await getUser(w),
+        traits: flatten(allTraits[w]),
+      };
+    }),
   );
 
   // Deterministic engine = pre-filter. Take top 8 to give the LLM a curated
@@ -123,20 +156,33 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
   }
 
   // On-chain rep snapshot for the shortlist (incl. viewer for prompt context).
+  // Demo wallets ship their own pre-baked profile — only the real ones need
+  // the on-chain hit, which keeps the demo fast and avoids RPC failures for
+  // PDAs that don't exist.
   const profileWallets = [viewerWallet, ...ranked.map((c) => c.wallet)];
-  const profileKeys = profileWallets.map((w) => userPda(new PublicKey(w))[0]);
-  const profileAccts = await connection.getMultipleAccountsInfo(profileKeys);
+  const realProfileWallets = profileWallets.filter((w) => !demoByWallet.has(w));
+  const realProfileKeys = realProfileWallets.map((w) => userPda(new PublicKey(w))[0]);
+  const realProfileAccts = realProfileKeys.length
+    ? await connection.getMultipleAccountsInfo(realProfileKeys)
+    : [];
   const profiles: Record<
     string,
     { reputation: number; eventsAttended: number; connectionsMade: number; badgesEarned: number } | null
   > = {};
-  profileAccts.forEach((acct, i) => {
+  for (const w of profileWallets) {
+    const demo = demoByWallet.get(w);
+    if (demo) {
+      profiles[w] = demo.profile;
+      continue;
+    }
+    const idx = realProfileWallets.indexOf(w);
+    const acct = realProfileAccts[idx];
     if (!acct) {
-      profiles[profileWallets[i]] = null;
-      return;
+      profiles[w] = null;
+      continue;
     }
     const d = decodeUserProfile(acct.data);
-    profiles[profileWallets[i]] = d
+    profiles[w] = d
       ? {
           reputation: Number(d.reputation),
           eventsAttended: d.eventsAttended,
@@ -144,7 +190,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ address: st
           badgesEarned: d.badgesEarned,
         }
       : null;
-  });
+  }
 
   const viewerUser = await getUser(viewerWallet);
 
