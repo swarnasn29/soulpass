@@ -17,15 +17,20 @@ import {
   MapPin,
   Crown,
   Plus,
+  ShieldCheck,
+  Sparkles,
+  Tag,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { Button, Input, Section } from "@/components/ui";
+import { Button, Input, Section, Textarea } from "@/components/ui";
+import { ImageUpload, type ImageUploadValue } from "@/components/ImageUpload";
 import { cn } from "@/lib/cn";
 import { useSoulpass } from "@/hooks/useSoulpass";
 import { useApi } from "@/hooks/useApi";
 import { connection } from "@/lib/solana";
 import { decodeUserProfile } from "@/lib/program";
 import { userPda } from "@/lib/pda";
+import { listTemplates } from "@/lib/matchTemplates";
 import { PublicKey } from "@solana/web3.js";
 import type {
   EventMetadata,
@@ -37,6 +42,8 @@ import type {
 type Participant = RegistrationMetadata & {
   user: UserMetadata | null;
   reputation?: number;
+  checkedIn?: boolean;
+  checkedInAt?: number;
 };
 
 type SortKey = "recent" | "reputation" | "name";
@@ -433,7 +440,14 @@ export default function DashboardPage() {
                 <HostsTab organizerAddress={selectedEvent.organizer} />
               )}
               {tab === "Settings" && (
-                <SettingsTab event={selectedEvent} />
+                <SettingsTab
+                  event={selectedEvent}
+                  onSaved={(updated) =>
+                    setEvents((prev) =>
+                      (prev ?? []).map((e) => (e.address === updated.address ? updated : e)),
+                    )
+                  }
+                />
               )}
               {tab === "Participants" && (
                 <>
@@ -681,7 +695,15 @@ function ParticipantsTable({
                   </div>
                 </td>
                 <td className="px-2 py-4">
-                  <StatusPill status={p.status} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusPill status={p.status} />
+                    {p.checkedIn && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-positive)]/30 bg-[var(--color-positive)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-positive)]">
+                        <Check className="h-3 w-3" />
+                        Checked in
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-2 py-4">
                   <ReputationBars value={p.reputation} />
@@ -814,43 +836,465 @@ function HostsTab({ organizerAddress }: { organizerAddress: string }) {
   );
 }
 
-function SettingsTab({ event }: { event: EventMetadata }) {
+function SettingsTab({
+  event,
+  onSaved,
+}: {
+  event: EventMetadata;
+  onSaved: (updated: EventMetadata) => void;
+}) {
+  const { apiFetch } = useApi();
+
+  const [description, setDescription] = useState(event.description);
+  const [location, setLocation] = useState(event.location);
+  const [cover, setCover] = useState<ImageUploadValue | null>(
+    event.cover ? { url: event.cover, arUri: event.coverArUri ?? "", txId: "" } : null,
+  );
+  const [venueImage, setVenueImage] = useState<ImageUploadValue | null>(
+    event.venueImage
+      ? { url: event.venueImage, arUri: event.venueImageArUri ?? "", txId: "" }
+      : null,
+  );
+  const [tags, setTags] = useState<string[]>(event.tags);
+  const [tagDraft, setTagDraft] = useState("");
+  const [questions, setQuestions] = useState<string[]>(event.questions);
+  const [questionDraft, setQuestionDraft] = useState("");
+  const [contactFields, setContactFields] = useState<string[]>(event.contactFields);
+  const [gateRep, setGateRep] = useState<boolean>(event.minReputation != null);
+  const [minRep, setMinRep] = useState<string>(
+    event.minReputation != null ? String(event.minReputation) : "600",
+  );
+  const [matchEnabled, setMatchEnabled] = useState<boolean>(!!event.matchSchema?.enabled);
+  const [matchTemplate, setMatchTemplate] = useState<string>(
+    event.matchSchema?.templateId ?? "tech",
+  );
+  const [status, setStatus] = useState<EventMetadata["status"]>(event.status);
+
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  // When the user switches to a different event, reset the form to that
+  // event's values so we're not editing stale state.
+  useEffect(() => {
+    setDescription(event.description);
+    setLocation(event.location);
+    setCover(event.cover ? { url: event.cover, arUri: event.coverArUri ?? "", txId: "" } : null);
+    setVenueImage(
+      event.venueImage
+        ? { url: event.venueImage, arUri: event.venueImageArUri ?? "", txId: "" }
+        : null,
+    );
+    setTags(event.tags);
+    setQuestions(event.questions);
+    setContactFields(event.contactFields);
+    setGateRep(event.minReputation != null);
+    setMinRep(event.minReputation != null ? String(event.minReputation) : "600");
+    setMatchEnabled(!!event.matchSchema?.enabled);
+    setMatchTemplate(event.matchSchema?.templateId ?? "tech");
+    setStatus(event.status);
+    setErr(null);
+    setOk(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event.address]);
+
+  const addTag = () => {
+    const t = tagDraft.trim().toLowerCase().replace(/^#+/, "");
+    if (!t || tags.includes(t) || tags.length >= 12) {
+      setTagDraft("");
+      return;
+    }
+    setTags([...tags, t]);
+    setTagDraft("");
+  };
+  const addQuestion = () => {
+    const q = questionDraft.trim();
+    if (!q || questions.length >= 10) return;
+    setQuestions([...questions, q]);
+    setQuestionDraft("");
+  };
+  const toggleContact = (id: string) =>
+    setContactFields((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+
+  const save = async () => {
+    setErr(null);
+    setOk(false);
+    setSaving(true);
+    try {
+      const body: Partial<EventMetadata> = {
+        address: event.address,
+        description,
+        location,
+        cover: cover?.url ?? "",
+        coverArUri: cover?.arUri || undefined,
+        venueImage: venueImage?.url ?? "",
+        venueImageArUri: venueImage?.arUri || undefined,
+        tags,
+        questions,
+        contactFields,
+        minReputation: gateRep
+          ? Math.max(0, Math.min(100_000, parseInt(minRep || "0", 10) || 0))
+          : null,
+        matchSchema: {
+          enabled: matchEnabled,
+          templateId: matchEnabled ? matchTemplate : null,
+        },
+        status,
+      };
+      const res = await apiFetch("/api/events", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const j = (await res.json()) as { event: EventMetadata };
+      onSaved(j.event);
+      setOk(true);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const togglePublish = () => setStatus((s) => (s === "published" ? "draft" : "published"));
+
   return (
-    <div className="space-y-4 text-sm text-white/70">
-      <div className="space-y-1">
+    <div className="space-y-6">
+      {/* Immutable on-chain fields — show but disable editing */}
+      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-white/50">
+          <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+          Locked on-chain
+        </div>
+        <p className="mt-2 text-xs text-white/50">
+          Title, dates, and capacity are stored on Solana and can&apos;t be edited.
+        </p>
+        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+              Title
+            </div>
+            <div className="truncate">{event.title}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+              Capacity
+            </div>
+            <div>{event.capacity}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+              Starts
+            </div>
+            <div>{new Date(event.startTs * 1000).toLocaleString()}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-white/40">
+              Ends
+            </div>
+            <div>{new Date(event.endTs * 1000).toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Status */}
+      <div className="space-y-2">
         <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
           Status
         </div>
-        <div className="capitalize">{event.status}</div>
-      </div>
-      {event.minReputation != null && (
-        <div className="space-y-1">
-          <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
-            Minimum reputation
-          </div>
-          <div>{event.minReputation}</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold capitalize",
+              status === "published"
+                ? "border-[var(--color-positive)]/30 bg-[var(--color-positive)]/15 text-[var(--color-positive)]"
+                : "border-[var(--color-warn)]/30 bg-[var(--color-warn)]/15 text-[var(--color-warn)]",
+            )}
+          >
+            {status}
+          </span>
+          <Button variant="secondary" size="sm" onClick={togglePublish}>
+            {status === "published" ? "Move to Draft" : "Publish"}
+          </Button>
         </div>
-      )}
-      {event.tags.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
-            Tags
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {event.tags.map((t) => (
+      </div>
+
+      {/* Description */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Description
+        </div>
+        <Textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          maxLength={480}
+          rows={4}
+        />
+      </div>
+
+      {/* Location */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Location
+        </div>
+        <Input
+          icon={MapPin}
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+        />
+      </div>
+
+      {/* Cover */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Cover image
+        </div>
+        <ImageUpload
+          value={cover}
+          onChange={setCover}
+          aspect="video"
+          kind="event-cover"
+          owner={event.organizer}
+          eventAddress={event.address}
+        />
+      </div>
+
+      {/* Venue image */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Venue photo
+        </div>
+        <ImageUpload
+          value={venueImage}
+          onChange={setVenueImage}
+          aspect="wide"
+          kind="event-venue"
+          owner={event.organizer}
+          eventAddress={event.address}
+        />
+      </div>
+
+      {/* Tags */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Tags
+        </div>
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {tags.map((t) => (
               <span
                 key={t}
-                className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1 text-xs text-white/70"
+                className="inline-flex items-center gap-1 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-3 py-1 text-xs font-semibold text-[var(--color-accent)]"
               >
                 #{t}
+                <button
+                  type="button"
+                  onClick={() => setTags(tags.filter((x) => x !== t))}
+                  className="rounded-full hover:bg-white/10"
+                  aria-label={`Remove ${t}`}
+                >
+                  <XIcon className="h-3 w-3" />
+                </button>
               </span>
             ))}
           </div>
+        )}
+        <div className="flex gap-2">
+          <Input
+            icon={Tag}
+            value={tagDraft}
+            onChange={(e) => setTagDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                addTag();
+              }
+            }}
+            placeholder="Add a tag"
+            className="flex-1"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={addTag}
+            disabled={!tagDraft.trim() || tags.length >= 12}
+          >
+            <Plus className="h-4 w-4" />
+            Add
+          </Button>
         </div>
+      </div>
+
+      {/* Registration questions */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Registration questions
+        </div>
+        {questions.length > 0 && (
+          <ul className="space-y-2">
+            {questions.map((q, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-3 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-3"
+              >
+                <span className="mt-0.5 text-xs font-bold text-white/40">{i + 1}.</span>
+                <span className="flex-1 text-sm text-white/85">{q}</span>
+                <button
+                  type="button"
+                  onClick={() => setQuestions(questions.filter((_, idx) => idx !== i))}
+                  className="text-white/40 hover:text-[var(--color-danger)]"
+                  aria-label={`Remove question ${i + 1}`}
+                >
+                  <XIcon className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2">
+          <Input
+            value={questionDraft}
+            onChange={(e) => setQuestionDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addQuestion();
+              }
+            }}
+            placeholder="A question to ask attendees"
+            className="flex-1"
+            maxLength={200}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={addQuestion}
+            disabled={!questionDraft.trim() || questions.length >= 10}
+          >
+            <Plus className="h-4 w-4" />
+            Add
+          </Button>
+        </div>
+      </div>
+
+      {/* Contact fields */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Contact info to collect
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(["email", "phone", "twitter", "telegram", "discord", "linkedin", "github", "instagram", "website"] as const).map(
+            (id) => {
+              const active = contactFields.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => toggleContact(id)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-xs font-semibold capitalize transition-colors",
+                    active
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-black"
+                      : "border-[var(--color-border)] bg-[var(--color-surface)] text-white/80 hover:border-white/20",
+                  )}
+                >
+                  {id}
+                </button>
+              );
+            },
+          )}
+        </div>
+      </div>
+
+      {/* Min reputation gate */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          Reputation gate
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={gateRep}
+            onChange={(e) => setGateRep(e.target.checked)}
+            className="h-4 w-4 cursor-pointer accent-[var(--color-accent)]"
+          />
+          Require minimum reputation to register
+        </label>
+        {gateRep && (
+          <Input
+            type="number"
+            min={0}
+            max={100000}
+            value={minRep}
+            onChange={(e) => setMinRep(e.target.value)}
+            placeholder="600"
+          />
+        )}
+      </div>
+
+      {/* Matchmaking */}
+      <div className="space-y-2">
+        <div className="text-xs font-semibold uppercase tracking-wider text-white/40">
+          AI matchmaking
+        </div>
+        <label className="flex cursor-pointer items-start gap-3 text-sm text-white/70">
+          <input
+            type="checkbox"
+            checked={matchEnabled}
+            onChange={(e) => setMatchEnabled(e.target.checked)}
+            className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent)]"
+          />
+          <span className="flex-1">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-white">
+              <Sparkles className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+              Surface perfect-match for each attendee
+            </span>
+          </span>
+        </label>
+        {matchEnabled && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {listTemplates().map((tpl) => {
+              const active = matchTemplate === tpl.id;
+              return (
+                <button
+                  key={tpl.id}
+                  type="button"
+                  onClick={() => setMatchTemplate(tpl.id)}
+                  className={cn(
+                    "rounded-2xl border p-3 text-left transition-colors",
+                    active
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
+                      : "border-[var(--color-border)] bg-[var(--color-bg)] hover:border-white/20",
+                  )}
+                >
+                  <div className="font-display text-sm font-bold text-white">{tpl.name}</div>
+                  <div className="mt-0.5 text-[11px] text-white/55">{tpl.tagline}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {err && (
+        <p className="rounded-2xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-3 text-sm text-[var(--color-danger)]">
+          {err}
+        </p>
       )}
-      <p className="pt-2 text-xs text-white/50">
-        Editing event details — coming soon.
-      </p>
+      {ok && !err && (
+        <p className="rounded-2xl border border-[var(--color-positive)]/40 bg-[var(--color-positive)]/10 p-3 text-sm text-[var(--color-positive)]">
+          Saved.
+        </p>
+      )}
+
+      <div className="flex justify-end pt-2">
+        <Button onClick={save} loading={saving} disabled={saving}>
+          Save changes
+        </Button>
+      </div>
     </div>
   );
 }

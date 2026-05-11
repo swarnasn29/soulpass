@@ -221,6 +221,34 @@ export async function getUser(authority: string): Promise<UserMetadata | null> {
   return data ? rowToUser(data as UserRow) : null;
 }
 
+export async function getUsers(authorities: string[]): Promise<Map<string, UserMetadata>> {
+  if (authorities.length === 0) return new Map();
+  const sb = getSupabase();
+  const { data, error } = await sb.from("users").select("*").in("authority", authorities);
+  if (error) throw new Error(`getUsers: ${error.message}`);
+  const map = new Map<string, UserMetadata>();
+  for (const row of data ?? []) map.set((row as UserRow).authority, rowToUser(row as UserRow));
+  return map;
+}
+
+export async function upsertRegistrations(metas: RegistrationMetadata[]): Promise<void> {
+  if (metas.length === 0) return;
+  const sb = getSupabase();
+  const rows: RegRow[] = metas.map((m) => ({
+    event_address: m.eventAddress,
+    attendee_address: m.attendeeAddress,
+    status: m.status,
+    registered_at: m.registeredAt,
+    decided_at: m.decidedAt ?? null,
+    answers: m.answers ?? null,
+    contact: m.contact ?? null,
+  }));
+  const { error } = await sb
+    .from("registrations")
+    .upsert(rows, { onConflict: "event_address,attendee_address" });
+  if (error) throw new Error(`upsertRegistrations: ${error.message}`);
+}
+
 export async function upsertUser(meta: UserMetadata): Promise<void> {
   const sb = getSupabase();
   const row: UserRow = {
