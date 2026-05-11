@@ -23,7 +23,7 @@ type Toast = { kind: "ok" | "err"; text: string } | null;
 export default function CheckInPage({ params }: { params: Promise<{ address: string }> }) {
   const { address } = usePromise(params);
   const router = useRouter();
-  const { ready, authenticated, isOnboarded, wallet } = useSoulpass();
+  const { ready, authenticated, isOnboarded, wallet, loading: userLoading } = useSoulpass();
   const { send } = useGaslessTransaction();
 
   const [event, setEvent] = useState<EventAccount | null>(null);
@@ -32,10 +32,10 @@ export default function CheckInPage({ params }: { params: Promise<{ address: str
   const [toast, setToast] = useState<Toast>(null);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || userLoading) return;
     if (!authenticated) router.push("/");
     else if (!isOnboarded) router.push("/onboarding");
-  }, [ready, authenticated, isOnboarded, router]);
+  }, [ready, userLoading, authenticated, isOnboarded, router]);
 
   useEffect(() => {
     (async () => {
@@ -83,7 +83,7 @@ export default function CheckInPage({ params }: { params: Promise<{ address: str
     }
   };
 
-  if (!ready || !authenticated) return null;
+  if (!ready || !authenticated || userLoading) return null;
 
   if (event && !isOrganizer) {
     return (
