@@ -20,6 +20,11 @@ import { registrationPda } from "@/lib/pda";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// On-chain enumeration can take a while when the RPC blocks
+// getProgramAccounts and we fall back to walking transaction signatures.
+// 60s is Vercel's Hobby ceiling — the route always returns whatever it
+// has within budget, so this just buys headroom on the slow path.
+export const maxDuration = 60;
 
 type ParticipantPayload = RegistrationMetadata & {
   user: UserMetadata | null;
@@ -65,28 +70,29 @@ async function fetchViaProgramAccounts(eventAddress: string): Promise<OnchainReg
   return out;
 }
 
-// Public devnet rejects getProgramAccounts. As a fallback, walk the
-// signatures that touched this event PDA, find register_for_event calls,
-// and verify each candidate's Registration PDA still exists. This is
-// O(N) tx fetches but works on any RPC that supports the basic methods.
+// Public devnet rejects getProgramAccounts. Fallback: walk the signatures
+// that touched this event PDA, find register_for_event calls, and verify
+// each candidate's Registration PDA still exists. Uses Connection.getTransactions
+// for batching (one RPC round-trip) instead of fan-out — public devnet
+// throttles per-call and Vercel serverless has a tight wall-clock budget.
 async function fetchViaSignatures(eventAddress: string): Promise<OnchainReg[]> {
   const eventKey = new PublicKey(eventAddress);
+  // 300 sigs covers a 200-attendee event with room for check-ins, ratings,
+  // and connections in the same address. Going higher trades latency for
+  // diminishing-return coverage.
   const sigs = await connection.getSignaturesForAddress(
     eventKey,
-    { limit: 1000 },
+    { limit: 300 },
     "confirmed",
   );
   if (sigs.length === 0) return [];
 
-  const txs = await Promise.all(
-    sigs.map((s) =>
-      connection
-        .getTransaction(s.signature, {
-          maxSupportedTransactionVersion: 0,
-          commitment: "confirmed",
-        })
-        .catch(() => null),
-    ),
+  // Batched fetch — the SDK collapses this into chunked JSON-RPC requests
+  // under the hood, which is dramatically faster than Promise.all of N
+  // single calls and far less likely to trip RPC rate limits.
+  const txs = await connection.getTransactions(
+    sigs.map((s) => s.signature),
+    { maxSupportedTransactionVersion: 0, commitment: "confirmed" },
   );
 
   const programId = SOULPASS_PROGRAM_ID.toBase58();
@@ -94,11 +100,18 @@ async function fetchViaSignatures(eventAddress: string): Promise<OnchainReg[]> {
   for (const tx of txs) {
     if (!tx || tx.meta?.err) continue;
     const message = tx.transaction.message;
-    const keys = message.getAccountKeys
-      ? message.getAccountKeys().staticAccountKeys.map((k) => k.toBase58())
-      : (message as unknown as { accountKeys: PublicKey[] }).accountKeys.map((k) =>
-          k.toBase58(),
-        );
+    let keys: string[];
+    try {
+      keys =
+        "getAccountKeys" in message && typeof message.getAccountKeys === "function"
+          ? message.getAccountKeys().staticAccountKeys.map((k) => k.toBase58())
+          : (message as unknown as { accountKeys: PublicKey[] }).accountKeys.map((k) =>
+              k.toBase58(),
+            );
+    } catch {
+      // Transaction uses ALTs we can't resolve — skip it.
+      continue;
+    }
     const compiled =
       "compiledInstructions" in message
         ? message.compiledInstructions
@@ -167,10 +180,19 @@ async function fetchViaSignatures(eventAddress: string): Promise<OnchainReg[]> {
   return out;
 }
 
+// Race an async fn against a wall clock so a hung RPC can't keep the
+// route hostage. The off-chain rows still come back from Supabase.
+async function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race<T>([
+    p,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 async function fetchOnchainRegistrations(eventAddress: string): Promise<OnchainReg[]> {
   // Fast path: getProgramAccounts with filters. Helius/QuickNode allow it.
   try {
-    return await fetchViaProgramAccounts(eventAddress);
+    return await withTimeout(fetchViaProgramAccounts(eventAddress), 8_000, []);
   } catch (e) {
     console.warn(
       "[participants] getProgramAccounts failed, falling back to signatures:",
@@ -179,7 +201,7 @@ async function fetchOnchainRegistrations(eventAddress: string): Promise<OnchainR
   }
   // Fallback: works on public devnet (which rejects gpa).
   try {
-    return await fetchViaSignatures(eventAddress);
+    return await withTimeout(fetchViaSignatures(eventAddress), 25_000, []);
   } catch (e) {
     console.warn("[participants] signatures fallback failed:", (e as Error).message);
     return [];
