@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listEvents, upsertEvent, type EventMetadata } from "@/lib/eventMetaStore";
 import { MATCH_TEMPLATES } from "@/lib/matchTemplates";
 import { uploadJson } from "@/lib/arweave";
-import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
+import { authErrorResponse, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,9 +28,9 @@ export async function POST(req: NextRequest) {
   try {
     await requireWallet(req, body.organizer!);
   } catch (e) {
-    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
-    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
-    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+    const resp = authErrorResponse(e);
+    if (resp) return resp;
+    throw e;
   }
   const status: EventMetadata["status"] = body.status === "draft" ? "draft" : "published";
   const meta: EventMetadata = {

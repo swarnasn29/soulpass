@@ -9,7 +9,7 @@ import {
   type RegistrationStatus,
   type UserMetadata,
 } from "@/lib/eventMetaStore";
-import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
+import { authErrorResponse, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,9 +40,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ address: s
   try {
     await requireWallet(req, body.attendeeAddress);
   } catch (e) {
-    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
-    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
-    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+    const resp = authErrorResponse(e);
+    if (resp) return resp;
+    throw e;
   }
 
   const existing = await getRegistration(address, body.attendeeAddress);

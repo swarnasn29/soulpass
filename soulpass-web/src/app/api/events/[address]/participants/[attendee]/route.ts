@@ -5,7 +5,7 @@ import {
   upsertRegistration,
   type RegistrationStatus,
 } from "@/lib/eventMetaStore";
-import { ForbiddenError, UnauthorizedError, requireWallet } from "@/lib/auth";
+import { authErrorResponse, requireWallet } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,9 +25,9 @@ export async function POST(
   try {
     await requireWallet(req, event.organizer);
   } catch (e) {
-    if (e instanceof UnauthorizedError) return NextResponse.json({ error: e.message }, { status: 401 });
-    if (e instanceof ForbiddenError) return NextResponse.json({ error: e.message }, { status: 403 });
-    return NextResponse.json({ error: "Auth check failed" }, { status: 500 });
+    const resp = authErrorResponse(e);
+    if (resp) return resp;
+    throw e;
   }
 
   const body = (await req.json()) as { status?: RegistrationStatus };

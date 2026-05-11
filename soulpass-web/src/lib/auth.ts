@@ -1,5 +1,5 @@
 import "server-only";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { PrivyClient } from "@privy-io/node";
 
 // Singleton — the Privy client lazily fetches JWKS on first verify.
@@ -9,12 +9,15 @@ function getPrivy(): PrivyClient {
   if (cachedClient) return cachedClient;
   const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
   const appSecret = process.env.PRIVY_APP_SECRET;
-  if (!appId || !appSecret) {
-    throw new Error(
-      "Privy server-side auth is not configured. Set NEXT_PUBLIC_PRIVY_APP_ID and PRIVY_APP_SECRET (server-only).",
+  const missing: string[] = [];
+  if (!appId) missing.push("NEXT_PUBLIC_PRIVY_APP_ID");
+  if (!appSecret) missing.push("PRIVY_APP_SECRET");
+  if (missing.length) {
+    throw new AuthConfigError(
+      `Privy server-side auth not configured — missing env: ${missing.join(", ")}`,
     );
   }
-  cachedClient = new PrivyClient({ appId, appSecret });
+  cachedClient = new PrivyClient({ appId: appId!, appSecret: appSecret! });
   return cachedClient;
 }
 
@@ -37,6 +40,17 @@ export class ForbiddenError extends Error {
   constructor(message = "Forbidden") {
     super(message);
     this.name = "ForbiddenError";
+  }
+}
+
+// Server is misconfigured (missing env vars, JWKS unreachable, etc). Surfaced
+// as 500 to the client but with a descriptive message so the developer can
+// see WHY in the network tab instead of a generic "Auth check failed".
+export class AuthConfigError extends Error {
+  status = 500 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthConfigError";
   }
 }
 
@@ -127,4 +141,26 @@ export async function requireWallet(
     );
   }
   return session;
+}
+
+/**
+ * Maps an auth error thrown by requireSession/requireWallet to the right
+ * NextResponse. Routes used to do this inline with a hardcoded "Auth check
+ * failed" 500 — which hid real config errors (missing env vars, etc).
+ * Returns null if the error is not auth-related (caller should rethrow).
+ */
+export function authErrorResponse(e: unknown): NextResponse | null {
+  if (e instanceof UnauthorizedError) {
+    return NextResponse.json({ error: e.message }, { status: 401 });
+  }
+  if (e instanceof ForbiddenError) {
+    return NextResponse.json({ error: e.message }, { status: 403 });
+  }
+  if (e instanceof AuthConfigError) {
+    // Log so the developer can see the full reason in the server console; the
+    // message itself is descriptive enough to also return to the client.
+    console.error("[auth] config error:", e.message);
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+  return null;
 }
